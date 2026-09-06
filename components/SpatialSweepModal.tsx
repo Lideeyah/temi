@@ -11,6 +11,7 @@ import {
   Radar,
   ScanLine,
   ShieldCheck,
+  Timer,
 } from 'lucide-react';
 import { decodeEventLog, type Address, type Hex, type WalletClient } from 'viem';
 import { creditcoinPublicClient, blockscoutTx, creditcoinTestnet } from '@/lib/chains';
@@ -60,6 +61,13 @@ type Phase =
   | 'settled'
   | 'rejected';
 
+interface ClaimQuote {
+  tier1Draw: bigint;
+  tier2Draw: bigint;
+  instant: boolean;
+  bondRequired: bigint;
+}
+
 interface SettlementReceipt {
   txHash: Hex;
   payout: bigint;
@@ -107,6 +115,8 @@ export function SpatialSweepModal({
   const [lossInput, setLossInput] = useState('');
   const [serialMatch, setSerialMatch] = useState<SerialMatch | null>(null);
   const serialCropsRef = useRef<HTMLCanvasElement[]>([]);
+  const [quote, setQuote] = useState<ClaimQuote | null>(null);
+  const [escrow, setEscrow] = useState<{ claimId: bigint; amount: bigint } | null>(null);
 
   const liveSigma = computeJitterSigma(samples);
   const isProperty = asset?.category === 1;
@@ -115,6 +125,38 @@ export function SpatialSweepModal({
   const claimedLoss = lossInput.trim() ? parseTctc(lossInput) : (asset?.declaredValue ?? 0n);
   const lossExceedsDeclared = asset ? claimedLoss > asset.declaredValue : false;
   const lossValid = claimedLoss > 0n && !lossExceedsDeclared;
+
+  // Ask the contract what this claim would actually do, so the merchant sees whether part of
+  // it will be escrowed *before* they hold a camera up for three seconds.
+  useEffect(() => {
+    if (!open || !asset || !account || !TEMI_VAULT_ADDRESS || claimedLoss <= 0n) {
+      setQuote(null);
+      return;
+    }
+    // Captured locally: the module-level const is `Address | null`, and TypeScript will not
+    // carry the narrowing above into this closure.
+    const vaultAddress = TEMI_VAULT_ADDRESS;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void creditcoinPublicClient
+        .readContract({
+          address: vaultAddress,
+          abi: temiVaultAbi,
+          functionName: 'quoteClaim',
+          args: [asset.assetId, claimedLoss, account],
+        })
+        .then((raw) => {
+          if (cancelled) return;
+          const q = raw as readonly [bigint, bigint, boolean, bigint];
+          setQuote({ tier1Draw: q[0], tier2Draw: q[1], instant: q[2], bondRequired: q[3] });
+        })
+        .catch(() => !cancelled && setQuote(null));
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [open, asset, account, claimedLoss]);
 
   // Seed the field from the declared value once per asset. Keyed on the id, not the object:
   // the vault re-polls every 12s and hands back a fresh object each time, which would otherwise
@@ -147,6 +189,8 @@ export function SpatialSweepModal({
     setLossInput('');
     setSerialMatch(null);
     serialCropsRef.current = [];
+    setQuote(null);
+    setEscrow(null);
   }, [stopCamera]);
 
   useEffect(() => {
@@ -316,6 +360,7 @@ export function SpatialSweepModal({
         ],
         account,
         chain: creditcoinTestnet,
+        value: quote?.bondRequired ?? 0n,
       });
 
       const txReceipt = await creditcoinPublicClient.waitForTransactionReceipt({ hash });
@@ -344,6 +389,21 @@ export function SpatialSweepModal({
         }
       }
 
+      for (const log of txReceipt.logs) {
+        if (log.address.toLowerCase() !== TEMI_VAULT_ADDRESS.toLowerCase()) continue;
+        try {
+          const decoded = decodeEventLog({ abi: temiVaultAbi, data: log.data, topics: log.topics });
+          if (decoded.eventName === 'ClaimEscrowed') {
+            const args = decoded.args as { claimId: bigint; escrowedTier2: bigint; immediatePayout: bigint };
+            setEscrow({ claimId: args.claimId, amount: args.escrowedTier2 });
+            payout = args.immediatePayout;
+            break;
+          }
+        } catch {
+          /* not ours */
+        }
+      }
+
       setReceipt({ txHash: hash, payout, blockNumber: txReceipt.blockNumber });
       setPhase('settled');
       onSettled();
@@ -363,7 +423,7 @@ export function SpatialSweepModal({
       const shortMessage = message.split('\n')[0];
       fail('ERR_SETTLEMENT_REJECTED', 'Settlement rejected', shortMessage);
     }
-  }, [asset, walletClient, account, isProperty, claimedLoss, fail, stopCamera, onSettled]);
+  }, [asset, walletClient, account, isProperty, claimedLoss, quote, fail, stopCamera, onSettled]);
 
   if (!asset) return null;
 
@@ -425,6 +485,28 @@ export function SpatialSweepModal({
               </span>
             </div>
           </Field>
+
+          {quote && quote.tier2Draw > 0n ? (
+            <div className="border border-hairline bg-paper-raised px-3.5 py-3">
+              <p className="eyebrow mb-2">What this claim would do</p>
+              <MetricRow label="From your own vault" value={`${formatTctc(quote.tier1Draw)} tCTC`} />
+              <MetricRow label="From the mutual buffer" value={`${formatTctc(quote.tier2Draw)} tCTC`} tone="moss" />
+              {quote.instant ? (
+                <p className="mt-1.5 text-[10.5px] leading-snug text-moss">
+                  Small enough to settle in one block. You are paid immediately.
+                </p>
+              ) : (
+                <p className="mt-1.5 text-[10.5px] leading-relaxed text-ochre">
+                  Your own {formatTctc(quote.tier1Draw)} tCTC is paid immediately. The buffer&apos;s
+                  share is held for 24 hours so anyone can object to it, then released — with a
+                  10% bond withheld from your payout and returned when it settles.
+                  {quote.bondRequired > 0n
+                    ? ` You will also need to send ${formatTctc(quote.bondRequired)} tCTC to cover the bond.`
+                    : ''}
+                </p>
+              )}
+            </div>
+          ) : null}
 
           {lossExceedsDeclared ? (
             <Notice tone="rust" title="Above your declared value">
@@ -644,6 +726,14 @@ export function SpatialSweepModal({
             ) : null}
             {spatialNote ? <MetricRow label="Spatial lock" value={spatialNote} tone="steel" /> : null}
           </div>
+
+          {escrow ? (
+            <Notice tone="ochre" title={`${formatTctc(escrow.amount)} tCTC held for challenge`} icon={<Timer size={12} />}>
+              Claim #{escrow.claimId.toString()}. The mutual buffer&apos;s share is open to
+              objection for 24 hours, then you can release it from your dashboard. Your own funds
+              above are already in your wallet.
+            </Notice>
+          ) : null}
 
           {/* Simulated ecosystem off-ramp. Labelled as simulated — the on-chain leg above is real. */}
           <div className="border border-hairline border-l-2 border-l-ochre bg-[rgba(140,115,62,0.06)] px-3.5 py-3">

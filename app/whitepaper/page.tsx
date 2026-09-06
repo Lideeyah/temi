@@ -15,6 +15,7 @@ const CONTENTS = [
   ['1', 'The problem', 'problem'],
   ['2', 'The dual reserve', 'reserve'],
   ['3', 'Solvency invariant', 'invariant'],
+  ['3b', 'Optimistic settlement', 'optimistic'],
   ['4', 'Physical attestation', 'attestation'],
   ['5', 'Spatial lock', 'spatial'],
   ['6', 'Attestcoin readability', 'attestcoin'],
@@ -214,6 +215,67 @@ lifetimeTier2Drawn += tier2Draw                      // the cap has to accumulat
                 cap would hold their Tier 2 draw to ₦750,000 and their payout to ₦962,500. The
                 cover grows with participation rather than being sold up front.
               </P>
+            </Section>
+
+            {/* ---------------------------------------------------- */}
+            <Section id="optimistic" index="3b" title="Optimistic settlement">
+              <P>
+                A browser cannot prove where a sensor reading came from. That is not a bug in
+                Tèmi&apos;s implementation, it is a property of the platform, and section 8 says
+                so plainly. What a protocol can do is make forging one expensive and give
+                somebody standing to object.
+              </P>
+              <P>
+                The first question is what actually needs protecting. A Tier 1 draw is the
+                claimant&apos;s own money — forging telemetry to reach it is pointless, because{' '}
+                <Mono>withdrawTier1</Mono> already hands it over for free. The only thing worth
+                attacking is the draw from the mutual buffer. So the challenge window is keyed to
+                that, and not to the size of the claim.
+              </P>
+              <Claim>
+                A merchant taking their own reserve back is never delayed, whatever the headline
+                figure. Only other people&apos;s money waits.
+              </Claim>
+              <Code label="TemiVault.settleClaim">{`instantCap = 1% × totalTier2PoolBalance
+
+tier2Draw <= instantCap   ->  paid in the same block, as before
+tier2Draw >  instantCap   ->  tier1Draw paid immediately
+                              tier2Draw escrowed for 24 hours
+                              bond = 10% of the escrow, withheld from the payout`}</Code>
+              <P>
+                The bond is <em>withheld</em> rather than demanded. A merchant whose shop has just
+                burned down should not have to find spare tCTC before they can file, so any part
+                of the bond they do not send with the transaction is simply taken out of their own
+                immediate payout and returned when the claim settles.
+              </P>
+
+              <H3>Both sides have to stake</H3>
+              <P>
+                Anyone may challenge an open claim by matching the bond. If an arbiter finds the
+                claim fraudulent, the escrow returns to the buffer, the claimant forfeits their
+                bond, and half of it goes to whoever caught it. If the challenge was wrong, the
+                challenger&apos;s stake goes to the merchant they delayed.
+              </P>
+              <P>
+                That symmetry is the point. Without a stake on the challenger&apos;s side, the
+                window would be a free denial-of-service against honest merchants — exactly the
+                people the product exists for.
+              </P>
+              <P>
+                A rejected claim also restores what it consumed: the buffer is made whole, the
+                asset returns to cover so an honest re-claim is still possible, and the
+                operator&apos;s lifetime allowance is given back. Being wrongly accused should not
+                cost a merchant their headroom.
+              </P>
+              <Table
+                head={['Outcome', 'Claimant', 'Challenger', 'Mutual buffer']}
+                rows={[
+                  ['Unchallenged', 'escrow + bond returned', '—', 'unchanged'],
+                  ['Challenge upheld', 'forfeits the bond', 'stake back + 50% of the bond', 'escrow returned + 50% of the bond'],
+                  ['Challenge rejected', 'escrow + bond + the stake', 'loses the stake', 'unchanged'],
+                ]}
+                caption="Every branch is asserted in tests/challenge.test.mjs against the real bytecode, including that the contract's balance still covers Tier 1 plus the pool plus everything escrowed at each step."
+              />
             </Section>
 
             {/* ---------------------------------------------------- */}
@@ -530,6 +592,16 @@ require answer > 0                        // a Chainlink answer is signed`}</Cod
                     'By construction.',
                   ],
                   [
+                    'Forged telemetry on a large mutual-buffer draw',
+                    'Escrowed 24h with a 10% bond at risk; anyone may challenge and take half the forfeited bond.',
+                    'Yes — bytecode test: every branch conserves value and the vault stays solvent throughout.',
+                  ],
+                  [
+                    'Griefing honest merchants with spurious challenges',
+                    'A challenge requires a matching stake, forfeited to the merchant if the challenge fails.',
+                    'Yes — bytecode test: a wrong challenger ends down exactly their stake.',
+                  ],
+                  [
                     'Replaying a favourable historical price round',
                     'Round ids must strictly increase, and an observation older than 6h is refused outright.',
                     'Yes — bytecode test: resubmitting a round and submitting an earlier one both revert with NonMonotonicRound.',
@@ -593,14 +665,25 @@ require answer > 0                        // a Chainlink answer is signed`}</Cod
                 A claimant who patches the client can submit <Mono>jitterVariance</Mono> and{' '}
                 <Mono>parallaxScore</Mono> above the thresholds without ever pointing a camera at
                 anything. Nothing in the current design prevents this, because nothing signs the
-                sensor stream. The only real defence today is economic: the cumulative invariant
-                caps total extraction at 3× what the attacker deposited, so forging telemetry
-                costs real capital and returns a bounded multiple of it. That bound is now
-                enforced across an operator&apos;s whole history rather than per claim — which
-                is exactly the correction that makes the economic argument hold at all. Closing
-                the gap properly needs hardware attestation of the sensor pipeline — Android Play
-                Integrity or iOS App Attest — signing the telemetry before it reaches the chain.
-                That is the single most valuable thing to build next.
+                sensor stream, and no amount of cryptography inside the page can fix it: a
+                zero-knowledge proof would establish that the score was computed correctly, never
+                that the inputs were real.
+              </P>
+              <P>
+                So the defence is economic and procedural rather than cryptographic. Three things
+                stack. The cumulative invariant caps total extraction at 3× what the attacker
+                deposited, across their whole history. Anything drawing materially on the mutual
+                buffer is escrowed for 24 hours with a bond at risk, so a forgery has to survive a
+                period in which anyone can object to it and profit from being right. And the
+                serial-plate gate requires the registered machine to be physically in frame.
+              </P>
+              <P>
+                None of that makes forgery impossible. It makes it slow, capital-intensive,
+                bounded, and observable — which is the most a web application can honestly claim.
+                Closing the gap properly needs hardware attestation of the sensor pipeline —
+                Android Play Integrity or iOS App Attest — signing the telemetry before it reaches
+                the chain, which requires a native shell. That remains the single most valuable
+                thing to build next.
               </P>
 
               <H3>A physical diorama defeats the parallax gate</H3>
@@ -625,6 +708,17 @@ require answer > 0                        // a Chainlink answer is signed`}</Cod
                 rejection rate on low-end hardware to be the binding practical problem. Note also
                 that the σ ≥ 0.01 tremor floor is close to the resting noise floor of some
                 accelerometers, which makes it a weak gate on those devices.
+              </P>
+
+              <H3>The arbiter is a trusted party</H3>
+              <P>
+                A challenged claim is decided by a single <Mono>arbiter</Mono> address, set by the
+                treasury. That is a real centralisation point: a corrupt arbiter could uphold
+                every challenge and confiscate honest merchants&apos; bonds, or dismiss every
+                challenge and let fraud through. The role is separable — <Mono>setArbiter</Mono>{' '}
+                can hand it to a DAO or a dispute-resolution contract — but nothing more
+                decentralised is wired up today. The bounded blast radius is that an arbiter can
+                only touch claims that are actually under challenge, and never the instant path.
               </P>
 
               <H3>OCR will refuse some honest claims</H3>
@@ -703,6 +797,10 @@ require answer > 0                        // a Chainlink answer is signed`}</Cod
                   ['Spatial resolution', 'H3 res 10 (~66 m²)', 'on-chain exact match'],
                   ['Settlement chain', `cc3-testnet ${creditcoinTestnet.id}`, '—'],
                   ['Attestcoin source chain', 'Ethereum Sepolia, key 1', 'trustedSourcePortal, write-once'],
+                  ['Challenge window', '24 hours', 'CHALLENGE_WINDOW'],
+                  ['Instant settlement cap', '1% of the buffer', 'INSTANT_TIER2_CAP_BPS'],
+                  ['Claim bond', '10% of the escrow', 'CLAIM_BOND_BPS'],
+                  ['Challenger reward', '50% of a forfeited bond', 'CHALLENGER_REWARD_BPS'],
                   ['Oracle staleness window', '6 hours', 'MAX_ORACLE_STALENESS'],
                   ['Oracle scaling', '8dp → 18dp (×1e10)', 'ORACLE_SCALE_TO_WAD'],
                   ['Price feed', 'Chainlink ETH/USD, Sepolia', 'trustedPriceFeed, write-once'],

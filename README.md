@@ -127,6 +127,22 @@ is enough to prove someone is standing at their own stall and not enough to trac
 
 ---
 
+## Optimistic settlement
+
+A browser cannot prove where a sensor reading came from, so large draws on *other people's*
+money are not taken on trust. The window is keyed to the Tier 2 draw, not the claim size — a
+merchant taking their own Tier 1 back is never delayed:
+
+| Tier 2 draw | What happens |
+| --- | --- |
+| ≤ 1% of the buffer | settles in the same block |
+| above that | Tier 1 paid immediately; the buffer's share escrowed 24h with a 10% bond |
+
+Anyone may challenge by matching the bond. Challenge upheld: escrow returns to the buffer, the
+claimant forfeits the bond, half goes to whoever caught it, and the asset returns to cover so an
+honest re-claim is still possible. Challenge rejected: the challenger's stake goes to the merchant
+they delayed — without that, the window would be a free denial-of-service against honest users.
+
 ## Solvency invariant
 
 ```
@@ -183,6 +199,9 @@ deployer at <https://faucet.creditcoin.org> first.
   storage, real reverts, real value transfers. Covers the 85/15 split, global asset identity,
   both attestation gates, the serial-plate gate, the spatial lock, unencumbered withdrawal,
   write-once portal configuration, vault solvency, and the multi-asset drain attack.
+- `tests/challenge.test.mjs` — optimistic settlement end to end: instant vs escrowed paths, the
+  window, both challenge outcomes, allowance and asset restoration on rejection, and a solvency
+  assertion at every state transition.
 - `tests/oracle.test.mjs` — the live-valuation path against the real bytecode, with a stub
   verifier standing in at `0x0FD2`: the indexed-topic decode checked against a genuine Sepolia
   log, 8→18 decimal scaling, monotonic rounds, the staleness backstop, and conversion.

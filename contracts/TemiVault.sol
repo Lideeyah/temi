@@ -46,6 +46,28 @@ contract TemiVault {
         bool isActive;
     }
 
+    enum ClaimStatus {
+        None,
+        Pending,
+        Challenged,
+        Settled,
+        Rejected
+    }
+
+    struct PendingClaim {
+        address claimant;
+        bytes32 assetId;
+        /// @notice Tier 2 held back from the pool until the window closes.
+        uint256 escrowedTier2;
+        /// @notice Withheld from the claimant. Forfeited if the claim is found fraudulent.
+        uint256 bond;
+        /// @notice Matching stake posted by a challenger, returned if they are right.
+        uint256 challengeBond;
+        address challenger;
+        uint64 filedAt;
+        ClaimStatus status;
+    }
+
     struct UserReserve {
         uint256 tier1PersonalBalance;
         uint256 lifetimeDeposits;
@@ -161,6 +183,23 @@ contract TemiVault {
     /// @notice Minimum motion-parallax score on a 0-1000 scale. Rejects 2D screens and photographs.
     uint256 public constant MIN_PARALLAX_SCORE = 850;
 
+    /* ---------------- optimistic settlement ---------------- */
+
+    /// @notice How long a large mutual-buffer draw sits open to challenge.
+    uint256 public constant CHALLENGE_WINDOW = 24 hours;
+
+    /// @notice A Tier 2 draw at or below this share of the buffer settles instantly.
+    /// @dev    The escrow exists to protect *other people's* money, so it is keyed to the draw
+    ///         from the mutual buffer and not to the size of the claim. A merchant taking their
+    ///         own Tier 1 back is never delayed by it, whatever the headline figure.
+    uint256 public constant INSTANT_TIER2_CAP_BPS = 100; // 1% of the pool
+
+    /// @notice Bond posted against an escrowed claim, as a share of the escrowed amount.
+    uint256 public constant CLAIM_BOND_BPS = 1_000; // 10%
+
+    /// @notice Share of a forfeited bond paid to whoever caught the fraud. The rest joins the pool.
+    uint256 public constant CHALLENGER_REWARD_BPS = 5_000; // 50%
+
     /* ------------------------------------------------------------------ */
     /*                             STORAGE                                 */
     /* ------------------------------------------------------------------ */
@@ -184,6 +223,17 @@ contract TemiVault {
     mapping(bytes32 => Asset) private _assets;
     mapping(bytes32 => address) public assetOwner;
     mapping(address => bytes32[]) private _ownedAssetIds;
+
+    mapping(uint256 => PendingClaim) public pendingClaims;
+    uint256 public nextClaimId = 1;
+
+    /// @notice tCTC held against open claims — escrowed Tier 2, bonds and challenge stakes.
+    /// @dev    Tracked separately so solvency stays checkable: the contract's balance must
+    ///         always cover Tier 1 plus the pool plus this.
+    uint256 public totalEscrowed;
+
+    /// @notice Resolves challenges. A trust point, and named as one.
+    address public arbiter;
 
     uint256 private _reentrancyLock;
 
@@ -251,6 +301,26 @@ contract TemiVault {
 
     event Tier1Withdrawn(address indexed operator, uint256 amount, uint256 remainingBalance);
 
+    event ClaimEscrowed(
+        uint256 indexed claimId,
+        address indexed claimant,
+        bytes32 indexed assetId,
+        uint256 immediatePayout,
+        uint256 escrowedTier2,
+        uint256 bond,
+        uint64 challengeableUntil
+    );
+    event ClaimChallenged(uint256 indexed claimId, address indexed challenger, uint256 challengeBond);
+    event ClaimFinalised(uint256 indexed claimId, address indexed claimant, uint256 released);
+    event ClaimRejected(
+        uint256 indexed claimId,
+        address indexed claimant,
+        address indexed challenger,
+        uint256 returnedToPool,
+        uint256 challengerReward
+    );
+    event ArbiterSet(address previous, address current);
+
     /* ------------------------------------------------------------------ */
     /*                              ERRORS                                 */
     /* ------------------------------------------------------------------ */
@@ -289,6 +359,13 @@ contract TemiVault {
     error StalePriceObservation(uint256 updatedAt, uint256 nowTimestamp);
     error NoPriceObservation();
     error CtcPriceUnset();
+    error NotArbiter();
+    error UnknownClaim(uint256 claimId);
+    error ClaimNotPending(uint256 claimId);
+    error ChallengeWindowOpen(uint64 until);
+    error ChallengeWindowClosed(uint64 until);
+    error InsufficientChallengeBond(uint256 posted, uint256 required);
+    error BondRequired(uint256 required, uint256 available);
 
     modifier nonReentrant() {
         if (_reentrancyLock == 1) revert Reentrancy();
@@ -304,6 +381,19 @@ contract TemiVault {
 
     constructor(address treasury_) {
         treasury = treasury_ == address(0) ? msg.sender : treasury_;
+        arbiter = treasury;
+    }
+
+    modifier onlyArbiter() {
+        if (msg.sender != arbiter) revert NotArbiter();
+        _;
+    }
+
+    /// @notice Hand challenge resolution to a DAO or dispute-resolution contract.
+    function setArbiter(address newArbiter) external onlyTreasury {
+        if (newArbiter == address(0)) revert InvalidPortal();
+        emit ArbiterSet(arbiter, newArbiter);
+        arbiter = newArbiter;
     }
 
     /* ------------------------------------------------------------------ */
@@ -691,7 +781,8 @@ contract TemiVault {
     ///                       Must equal the assetId for movable hardware, binding the claim to
     ///                       the physical machine that was registered rather than to any damaged
     ///                       object. Ignored for fixed property, which is bound spatially instead.
-    /// @return payout        tCTC transferred to the caller.
+    /// @return payout  tCTC transferred immediately.
+    /// @return claimId  Non-zero when part of the settlement was escrowed for challenge.
     function settleClaim(
         bytes32 assetId,
         uint256 claimedLoss,
@@ -699,7 +790,7 @@ contract TemiVault {
         uint256 parallaxScore,
         uint64 liveH3Cell,
         bytes32 claimAssetHash
-    ) external nonReentrant returns (uint256 payout) {
+    ) external payable nonReentrant returns (uint256 payout, uint256 claimId) {
         Asset storage asset = _assets[assetId];
         if (asset.assetId == bytes32(0)) revert UnknownAsset(assetId);
         if (assetOwner[assetId] != msg.sender) revert NotAssetOwner(assetId);
@@ -745,16 +836,13 @@ contract TemiVault {
         if (tier2Draw > allowance) tier2Draw = allowance;
         if (tier2Draw > totalTier2PoolBalance) tier2Draw = totalTier2PoolBalance;
 
-        payout = tier1Draw + tier2Draw;
-        if (payout == 0) revert NoSettleableReserve();
+        if (tier1Draw + tier2Draw == 0) revert NoSettleableReserve();
 
-        // Effects before interaction.
+        // Accounting first, in both paths.
         reserve.tier1PersonalBalance -= tier1Draw;
         reserve.lifetimeTier2Drawn += tier2Draw;
         totalTier1Balance -= tier1Draw;
         totalTier2PoolBalance -= tier2Draw;
-        totalClaimsSettled += 1;
-        totalValueDisbursed += payout;
         asset.isActive = false;
 
         emit ClaimSettled(
@@ -763,12 +851,187 @@ contract TemiVault {
             claimedLoss,
             tier1Draw,
             tier2Draw,
-            payout,
+            tier1Draw + tier2Draw,
             jitterVariance,
             parallaxScore
         );
 
-        (bool ok, ) = msg.sender.call{value: payout}("");
+        // A draw small enough not to matter to anyone else settles on the spot, and so does a
+        // claim that only touches the claimant's own Tier 1. That is the common case: the
+        // product promise is emergency liquidity, and most honest claims never wait.
+        uint256 instantCap = (totalTier2PoolBalance * INSTANT_TIER2_CAP_BPS) / BPS_DENOMINATOR;
+        if (tier2Draw <= instantCap) {
+            totalClaimsSettled += 1;
+            totalValueDisbursed += tier1Draw + tier2Draw;
+            payout = tier1Draw + tier2Draw + msg.value; // any bond sent is simply returned
+            _pay(msg.sender, payout);
+            return (payout, 0);
+        }
+
+        // Above that, the mutual buffer's share is escrowed and put at risk of challenge.
+        uint256 bond = (tier2Draw * CLAIM_BOND_BPS) / BPS_DENOMINATOR;
+
+        // The bond may be posted with the transaction, but it does not have to be: any shortfall
+        // is withheld from the claimant's own immediate payout. An honest merchant whose shop
+        // just burned down should not need to find spare tCTC before they can file.
+        uint256 fromValue = msg.value >= bond ? bond : msg.value;
+        uint256 refund = msg.value - fromValue;
+        uint256 shortfall = bond - fromValue;
+        if (shortfall > 0) {
+            if (tier1Draw < shortfall) revert BondRequired(bond, fromValue + tier1Draw);
+            tier1Draw -= shortfall;
+        }
+
+        claimId = nextClaimId++;
+        pendingClaims[claimId] = PendingClaim({
+            claimant: msg.sender,
+            assetId: assetId,
+            escrowedTier2: tier2Draw,
+            bond: bond,
+            challengeBond: 0,
+            challenger: address(0),
+            filedAt: uint64(block.timestamp),
+            status: ClaimStatus.Pending
+        });
+        totalEscrowed += tier2Draw + bond;
+
+        payout = tier1Draw + refund;
+
+        emit ClaimEscrowed(
+            claimId,
+            msg.sender,
+            assetId,
+            payout,
+            tier2Draw,
+            bond,
+            uint64(block.timestamp + CHALLENGE_WINDOW)
+        );
+
+        if (payout > 0) _pay(msg.sender, payout);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*                      OPTIMISTIC SETTLEMENT                          */
+    /* ------------------------------------------------------------------ */
+
+    /// @notice Release an escrowed claim once its window has closed unchallenged.
+    /// @dev    Callable by anyone: the claimant should not have to be online, and nobody needs
+    ///         permission to complete a settlement the protocol already accepted.
+    function finaliseClaim(uint256 claimId) external nonReentrant returns (uint256 released) {
+        PendingClaim storage claim = pendingClaims[claimId];
+        if (claim.claimant == address(0)) revert UnknownClaim(claimId);
+        if (claim.status != ClaimStatus.Pending) revert ClaimNotPending(claimId);
+
+        uint64 until = claim.filedAt + uint64(CHALLENGE_WINDOW);
+        if (block.timestamp < until) revert ChallengeWindowOpen(until);
+
+        released = claim.escrowedTier2 + claim.bond;
+        claim.status = ClaimStatus.Settled;
+        totalEscrowed -= released;
+        totalClaimsSettled += 1;
+        totalValueDisbursed += claim.escrowedTier2;
+
+        emit ClaimFinalised(claimId, claim.claimant, released);
+        _pay(claim.claimant, released);
+    }
+
+    /// @notice Contest an escrowed claim, staking a matching bond against it.
+    /// @dev    The stake is what stops the challenge mechanism becoming a free denial-of-service
+    ///         against honest merchants: a wrong challenger pays the person they delayed.
+    function challengeClaim(uint256 claimId) external payable nonReentrant {
+        PendingClaim storage claim = pendingClaims[claimId];
+        if (claim.claimant == address(0)) revert UnknownClaim(claimId);
+        if (claim.status != ClaimStatus.Pending) revert ClaimNotPending(claimId);
+
+        uint64 until = claim.filedAt + uint64(CHALLENGE_WINDOW);
+        if (block.timestamp >= until) revert ChallengeWindowClosed(until);
+        if (msg.value < claim.bond) revert InsufficientChallengeBond(msg.value, claim.bond);
+
+        claim.status = ClaimStatus.Challenged;
+        claim.challenger = msg.sender;
+        claim.challengeBond = msg.value;
+        totalEscrowed += msg.value;
+
+        emit ClaimChallenged(claimId, msg.sender, msg.value);
+    }
+
+    /// @notice Resolve a challenged claim.
+    /// @param fraudulent True if the challenge was correct and the claim should be refused.
+    function resolveChallenge(uint256 claimId, bool fraudulent) external onlyArbiter nonReentrant {
+        PendingClaim storage claim = pendingClaims[claimId];
+        if (claim.claimant == address(0)) revert UnknownClaim(claimId);
+        if (claim.status != ClaimStatus.Challenged) revert ClaimNotPending(claimId);
+
+        uint256 escrow = claim.escrowedTier2;
+        uint256 bond = claim.bond;
+        uint256 challengeBond = claim.challengeBond;
+        address claimant = claim.claimant;
+        address challenger = claim.challenger;
+
+        totalEscrowed -= escrow + bond + challengeBond;
+
+        if (fraudulent) {
+            claim.status = ClaimStatus.Rejected;
+
+            // The buffer is made whole, and the allowance the claim consumed is given back —
+            // a rejected claim must not permanently cost an operator their headroom.
+            totalTier2PoolBalance += escrow;
+            UserReserve storage reserve = reserves[claimant];
+            reserve.lifetimeTier2Drawn -= escrow;
+
+            // The asset goes back into cover so an honest re-claim remains possible.
+            _assets[claim.assetId].isActive = true;
+
+            uint256 reward = (bond * CHALLENGER_REWARD_BPS) / BPS_DENOMINATOR;
+            totalTier2PoolBalance += bond - reward;
+
+            emit ClaimRejected(claimId, claimant, challenger, escrow + bond - reward, reward);
+            _pay(challenger, challengeBond + reward);
+            return;
+        }
+
+        // The challenge was wrong. The claimant is paid, and compensated for the delay out of
+        // the challenger's stake.
+        claim.status = ClaimStatus.Settled;
+        totalClaimsSettled += 1;
+        totalValueDisbursed += escrow;
+
+        emit ClaimFinalised(claimId, claimant, escrow + bond + challengeBond);
+        _pay(claimant, escrow + bond + challengeBond);
+    }
+
+    /// @notice What a claim would do right now, so the interface can say so before it is signed.
+    function quoteClaim(bytes32 assetId, uint256 claimedLoss, address claimant)
+        external
+        view
+        returns (uint256 tier1Draw, uint256 tier2Draw, bool instant, uint256 bondRequired)
+    {
+        UserReserve storage reserve = reserves[claimant];
+        tier1Draw = claimedLoss < reserve.tier1PersonalBalance ? claimedLoss : reserve.tier1PersonalBalance;
+
+        uint256 poolCap = (totalTier2PoolBalance * TIER2_DRAW_CAP_BPS) / BPS_DENOMINATOR;
+        uint256 lifetimeCap = reserve.lifetimeDeposits * LIFETIME_DEPOSIT_MULTIPLE;
+        uint256 allowance = lifetimeCap > reserve.lifetimeTier2Drawn
+            ? lifetimeCap - reserve.lifetimeTier2Drawn
+            : 0;
+
+        tier2Draw = claimedLoss - tier1Draw;
+        if (tier2Draw > poolCap) tier2Draw = poolCap;
+        if (tier2Draw > allowance) tier2Draw = allowance;
+        if (tier2Draw > totalTier2PoolBalance) tier2Draw = totalTier2PoolBalance;
+
+        uint256 remainingPool = totalTier2PoolBalance - tier2Draw;
+        instant = tier2Draw <= (remainingPool * INSTANT_TIER2_CAP_BPS) / BPS_DENOMINATOR;
+        bondRequired = instant ? 0 : (tier2Draw * CLAIM_BOND_BPS) / BPS_DENOMINATOR;
+
+        // Only the part the claimant cannot cover from their own payout needs new funds.
+        if (bondRequired > tier1Draw) bondRequired -= tier1Draw;
+        else bondRequired = 0;
+    }
+
+    function _pay(address to, uint256 amount) private {
+        if (amount == 0) return;
+        (bool ok, ) = to.call{value: amount}("");
         if (!ok) revert TransferFailed();
     }
 

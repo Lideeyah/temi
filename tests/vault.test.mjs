@@ -77,7 +77,7 @@ check('omitting the plate hash reverts', !noPlate.ok, noPlate.revert);
 const rightPlate = await chain.call(
   vault, 'settleClaim', [gen, E('1'), GOOD.jitter, GOOD.parallax, 0n, gen], { from: MERCHANT },
 );
-check('matching plate settles', rightPlate.ok, rightPlate.ok ? fmt(rightPlate.value) : rightPlate.revert);
+check('matching plate settles', rightPlate.ok, rightPlate.ok ? fmt(rightPlate.value[0]) : rightPlate.revert);
 
 /* ---------------------------------------------------------------- */
 console.log('\n[4] Spatial lock for fixed property');
@@ -86,7 +86,7 @@ await chain.call(vault, 'registerAsset', [shop, 1, E('5'), 622234000000000000n],
 const wrongCell = await chain.call(vault, 'settleClaim', [shop, E('1'), GOOD.jitter, GOOD.parallax, 622234000000000001n, ZERO], { from: MERCHANT });
 check('wrong H3 cell reverts', !wrongCell.ok, wrongCell.revert);
 const rightCell = await chain.call(vault, 'settleClaim', [shop, E('1'), GOOD.jitter, GOOD.parallax, 622234000000000000n, ZERO], { from: MERCHANT });
-check('matching H3 cell settles', rightCell.ok, rightCell.ok ? fmt(rightCell.value) : rightCell.revert);
+check('matching H3 cell settles', rightCell.ok, rightCell.ok ? fmt(rightCell.value[0]) : rightCell.revert);
 
 /* ---------------------------------------------------------------- */
 console.log('\n[5] Tier 1 is genuinely unencumbered');
@@ -115,12 +115,19 @@ const attackerStart = await chain.balanceOf(ATTACKER);
 
 let settled = 0;
 let reverted = 0;
+const escrowedIds = [];
 for (let i = 0; i < 10; i++) {
   const id = assetId(`fake-asset-${i}`);
   await chain.call(vault, 'registerAsset', [id, 0, E('50'), 0n], { from: ATTACKER });
   const r = await chain.call(vault, 'settleClaim', [id, E('50'), GOOD.jitter, GOOD.parallax, 0n, id], { from: ATTACKER });
-  if (r.ok) settled++;
+  if (r.ok) { settled++; if (r.value[1] > 0n) escrowedIds.push(r.value[1]); }
   else reverted++;
+}
+// Let every escrowed claim mature and pay out, so the cap is measured against the full
+// settlement rather than against what happened to clear immediately.
+const AFTER_WINDOW = BigInt(25 * 3600);
+for (const id of escrowedIds) {
+  await chain.call(vault, 'finaliseClaim', [id], { from: ATTACKER, timestamp: AFTER_WINDOW });
 }
 const attackerEnd = await chain.balanceOf(ATTACKER);
 const extracted = attackerEnd - attackerStart;
@@ -128,7 +135,7 @@ const poolAfter = (await chain.call(vault, 'totalTier2PoolBalance', [], { from: 
 const tier2Taken = poolBefore - poolAfter;
 
 console.log(`  pool before ${fmt(poolBefore)} -> after ${fmt(poolAfter)}`);
-console.log(`  claims settled ${settled}, reverted ${reverted}`);
+console.log(`  claims settled ${settled} (${escrowedIds.length} escrowed then finalised), reverted ${reverted}`);
 console.log(`  extracted ${fmt(extracted)} on a ${fmt(deposit)} deposit  (${(Number(extracted) / Number(deposit)).toFixed(2)}x)`);
 
 check('Tier 2 drawn never exceeds 3x lifetime deposits', tier2Taken <= deposit * 3n, `${fmt(tier2Taken)} vs cap ${fmt(deposit * 3n)}`);

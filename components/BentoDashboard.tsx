@@ -44,6 +44,7 @@ import { DepositModal } from './DepositModal';
 import { RegisterAssetModal } from './RegisterAssetModal';
 import { SpatialSweepModal } from './SpatialSweepModal';
 import { LiveValuationCard } from './LiveValuationCard';
+import { PendingClaimsCard } from './PendingClaimsCard';
 import { Badge, Button, MetricRow, Modal, Notice, StatusDot, TextInput } from './ui/Primitives';
 
 export function BentoDashboard() {
@@ -125,6 +126,10 @@ export function BentoDashboard() {
             onSweep={() => selectedAsset && setSweepAsset(selectedAsset)}
             connected={Boolean(wallet.address)}
             money={money}
+            claims={vault.claims}
+            walletClient={wallet.walletClient}
+            account={wallet.address}
+            onClaimsChanged={() => void vault.refresh()}
           />
 
           <InventoryTile
@@ -396,6 +401,10 @@ function IncidentTile({
   onSweep,
   connected,
   money,
+  claims,
+  walletClient,
+  account,
+  onClaimsChanged,
 }: {
   assets: VaultAsset[];
   selectedAssetId: string | null;
@@ -403,6 +412,10 @@ function IncidentTile({
   onSweep: () => void;
   connected: boolean;
   money: (wei: bigint) => string;
+  claims: import('@/hooks/useVault').PendingClaim[];
+  walletClient: ReturnType<typeof useWallet>['walletClient'];
+  account: ReturnType<typeof useWallet>['address'];
+  onClaimsChanged: () => void;
 }) {
   const selected = assets.find((a) => a.assetId === selectedAssetId) ?? null;
 
@@ -453,6 +466,13 @@ function IncidentTile({
           Requires camera + motion sensors. Nothing is uploaded.
         </p>
       </div>
+
+      <PendingClaimsCard
+        claims={claims}
+        walletClient={walletClient}
+        account={account}
+        onChanged={onClaimsChanged}
+      />
     </Tile>
   );
 }

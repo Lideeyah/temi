@@ -38,6 +38,19 @@ export interface OracleState {
   fresh: boolean;
 }
 
+export interface PendingClaim {
+  claimId: bigint;
+  assetId: `0x${string}`;
+  escrowedTier2: bigint;
+  bond: bigint;
+  challengeBond: bigint;
+  challenger: Address;
+  filedAt: bigint;
+  /** 1 Pending · 2 Challenged · 3 Settled · 4 Rejected */
+  status: number;
+  challengeableUntil: bigint;
+}
+
 export interface VaultState {
   tier1PersonalBalance: bigint;
   lifetimeDeposits: bigint;
@@ -46,6 +59,7 @@ export interface VaultState {
   assets: VaultAsset[];
   telemetry: VaultTelemetry | null;
   oracle: OracleState | null;
+  claims: PendingClaim[];
   blockNumber: bigint | null;
   loading: boolean;
   error: string | null;
@@ -59,6 +73,7 @@ const EMPTY: VaultState = {
   assets: [],
   telemetry: null,
   oracle: null,
+  claims: [],
   blockNumber: null,
   loading: true,
   error: null,
@@ -100,6 +115,65 @@ export function useVault(address: Address | null, pollMs = 12_000) {
       const t = telemetry as readonly bigint[];
       const p = priceObs as readonly bigint[];
 
+      // Escrowed claims are found through their event rather than by scanning ids — the
+      // claimant is indexed, so this is one filtered query instead of N reads.
+      let claims: PendingClaim[] = [];
+      if (address) {
+        const window = (await creditcoinPublicClient.readContract({
+          ...contract,
+          functionName: 'CHALLENGE_WINDOW',
+        })) as bigint;
+
+        const logs = await creditcoinPublicClient
+          .getLogs({
+            address: TEMI_VAULT_ADDRESS,
+            event: {
+              type: 'event',
+              name: 'ClaimEscrowed',
+              inputs: [
+                { name: 'claimId', type: 'uint256', indexed: true },
+                { name: 'claimant', type: 'address', indexed: true },
+                { name: 'assetId', type: 'bytes32', indexed: true },
+                { name: 'immediatePayout', type: 'uint256' },
+                { name: 'escrowedTier2', type: 'uint256' },
+                { name: 'bond', type: 'uint256' },
+                { name: 'challengeableUntil', type: 'uint64' },
+              ],
+            },
+            args: { claimant: address },
+            fromBlock: 'earliest',
+          })
+          .catch(() => []);
+
+        const states = await Promise.all(
+          logs.map((log) =>
+            creditcoinPublicClient.readContract({
+              ...contract,
+              functionName: 'pendingClaims',
+              args: [log.args.claimId as bigint],
+            }),
+          ),
+        );
+
+        claims = states
+          .map((raw, i) => {
+            const c = raw as readonly [Address, `0x${string}`, bigint, bigint, bigint, Address, bigint, number];
+            return {
+              claimId: logs[i].args.claimId as bigint,
+              assetId: c[1],
+              escrowedTier2: c[2],
+              bond: c[3],
+              challengeBond: c[4],
+              challenger: c[5],
+              filedAt: c[6],
+              status: Number(c[7]),
+              challengeableUntil: c[6] + window,
+            };
+          })
+          // Settled and Rejected claims are history, not something to act on.
+          .filter((c) => c.status === 1 || c.status === 2);
+      }
+
       setState({
         tier1PersonalBalance: reserve.tier1PersonalBalance,
         lifetimeDeposits: reserve.lifetimeDeposits,
@@ -117,6 +191,7 @@ export function useVault(address: Address | null, pollMs = 12_000) {
           lastSourceHeight: t[7],
           lastChainKey: t[8],
         },
+        claims,
         oracle: {
           answerWad: p[0],
           roundId: p[1],
