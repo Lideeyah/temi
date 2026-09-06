@@ -275,12 +275,12 @@ function Tile({
 }) {
   return (
     <section className={cn('card flex flex-col p-4', className)}>
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div>
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+        <div className="min-w-0">
           {eyebrow ? <p className="eyebrow mb-1">{eyebrow}</p> : null}
           <h2 className="text-[14px] font-semibold tracking-[-0.02em] text-ink">{title}</h2>
         </div>
-        {action}
+        {action ? <div className="shrink-0">{action}</div> : null}
       </div>
       {children}
     </section>
@@ -313,8 +313,8 @@ function ReserveTile({
       eyebrow="Dual reserve"
       title="Unencumbered position"
       action={
-        <Badge tone="moss">
-          <Activity size={9} strokeWidth={2} />
+        <Badge tone="moss" className="max-w-full whitespace-normal">
+          <Activity size={9} strokeWidth={2} className="shrink-0" />
           No premium · fully withdrawable
         </Badge>
       }
@@ -601,7 +601,7 @@ function AttestcoinConsole({
       title="Attestcoin & telemetry"
       action={<StatusDot tone={proverUp === false ? 'rust' : 'moss'} />}
     >
-      <div className="ruled -mx-1 px-1">
+      <div className="-mx-1 px-1">
         <p className="eyebrow mb-1 text-steel">Cross-chain readability</p>
         <MetricRow label="Source chain" value="Ethereum Sepolia" tone="steel" />
         <MetricRow label="Chain key" value={ATTESTCOIN_CHAIN_KEYS.ETHEREUM_SEPOLIA.toString()} tone="steel" />

@@ -27,10 +27,10 @@ import {
   type SweepTelemetry,
 } from '@/lib/SpatialSweepEngine';
 import { verifySpatialLock, cellIndexToH3, SpatialLockError } from '@/lib/H3SpatialLock';
-import { formatTctc, formatNgn, shortAssetId, truncateHash } from '@/lib/format';
+import { formatTctc, formatNgn, parseTctc, shortAssetId, truncateHash } from '@/lib/format';
 import type { VaultAsset } from '@/hooks/useVault';
 import { SensorOscilloscope } from './SensorOscilloscope';
-import { Badge, Button, MetricRow, Modal, Notice, StatusDot } from './ui/Primitives';
+import { Badge, Button, Field, MetricRow, Modal, Notice, StatusDot, TextInput } from './ui/Primitives';
 
 type Phase =
   | 'brief'
@@ -81,9 +81,25 @@ export function SpatialSweepModal({
   const [errorDetail, setErrorDetail] = useState<string | null>(null);
   const [spatialNote, setSpatialNote] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<SettlementReceipt | null>(null);
+  const [lossInput, setLossInput] = useState('');
 
   const liveSigma = computeJitterSigma(samples);
   const isProperty = asset?.category === 1;
+
+  // The merchant states their own loss; it is only capped by what they declared at registration.
+  const claimedLoss = lossInput.trim() ? parseTctc(lossInput) : (asset?.declaredValue ?? 0n);
+  const lossExceedsDeclared = asset ? claimedLoss > asset.declaredValue : false;
+  const lossValid = claimedLoss > 0n && !lossExceedsDeclared;
+
+  // Seed the field from the declared value once per asset. Keyed on the id, not the object:
+  // the vault re-polls every 12s and hands back a fresh object each time, which would otherwise
+  // wipe whatever the merchant had typed mid-claim.
+  const assetKey = asset?.assetId ?? null;
+  const declaredValue = asset?.declaredValue ?? 0n;
+  useEffect(() => {
+    if (assetKey && open) setLossInput(formatTctc(declaredValue, 4));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assetKey, open]);
 
   const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -103,6 +119,7 @@ export function SpatialSweepModal({
     setErrorDetail(null);
     setSpatialNote(null);
     setReceipt(null);
+    setLossInput('');
   }, [stopCamera]);
 
   useEffect(() => {
@@ -215,7 +232,7 @@ export function SpatialSweepModal({
         functionName: 'settleClaim',
         args: [
           asset.assetId,
-          asset.declaredValue,
+          claimedLoss,
           BigInt(result.jitterVariance),
           BigInt(result.parallaxScore),
           liveH3Cell,
@@ -269,7 +286,7 @@ export function SpatialSweepModal({
       const shortMessage = message.split('\n')[0];
       fail('ERR_SETTLEMENT_REJECTED', 'Settlement rejected', shortMessage);
     }
-  }, [asset, walletClient, account, isProperty, fail, stopCamera, onSettled]);
+  }, [asset, walletClient, account, isProperty, claimedLoss, fail, stopCamera, onSettled]);
 
   if (!asset) return null;
 
@@ -309,6 +326,36 @@ export function SpatialSweepModal({
             video is uploaded and no image ever leaves your phone.
           </p>
 
+          <Field
+            label="How much did you lose?"
+            hint="Capped at what you declared for this asset. The contract may still settle less, bounded by the mutual buffer."
+            suffix={
+              <span className="tabular text-[10px] text-slate-soft">
+                ₦{formatNgn(claimedLoss)}
+              </span>
+            }
+          >
+            <div className="relative">
+              <TextInput
+                value={lossInput}
+                onChange={(event) => setLossInput(event.target.value)}
+                inputMode="decimal"
+                placeholder="0.0"
+                className="pr-16"
+              />
+              <span className="tabular pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-slate-soft">
+                tCTC
+              </span>
+            </div>
+          </Field>
+
+          {lossExceedsDeclared ? (
+            <Notice tone="rust" title="Above your declared value">
+              This asset is declared at {formatTctc(asset.declaredValue)} tCTC. Lower the amount,
+              or the contract will reject the claim.
+            </Notice>
+          ) : null}
+
           <div className="grid gap-2 sm:grid-cols-2">
             <div className="border border-hairline bg-paper-raised px-3 py-2.5">
               <p className="eyebrow mb-1">Gate 1 · Tremor</p>
@@ -332,7 +379,7 @@ export function SpatialSweepModal({
             </Notice>
           ) : null}
 
-          <Button block onClick={() => void beginSweep()} disabled={!walletClient || !account}>
+          <Button block onClick={() => void beginSweep()} disabled={!walletClient || !account || !lossValid}>
             <Camera size={14} strokeWidth={1.75} />
             Begin sweep
           </Button>
@@ -457,6 +504,7 @@ export function SpatialSweepModal({
                 {formatTctc(receipt.payout)} <span className="text-[12px] text-slate-soft">tCTC</span>
               </span>
             </div>
+            <MetricRow label="Claimed" value={`${formatTctc(claimedLoss)} tCTC`} />
             <MetricRow label="Block" value={receipt.blockNumber.toString()} />
             <MetricRow label="Tx" value={truncateHash(receipt.txHash)} title={receipt.txHash} />
             {telemetry ? (

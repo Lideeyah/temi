@@ -119,6 +119,12 @@ contract TemiVault {
     uint256 public totalClaimsSettled;
     uint256 public totalValueDisbursed;
 
+    /// @notice Registry counters. Public so the landing page can render live network reach
+    ///         rather than a decorative number.
+    uint256 public totalAssetsRegistered;
+    /// @notice Distinct H3 resolution-10 cells with a shop locked to them.
+    uint256 public totalSpatialCellsLocked;
+
     mapping(address => UserReserve) public reserves;
 
     /// @dev Asset identities are global: a serial plate, or an (h3 cell, meter) pair, can only
@@ -434,6 +440,9 @@ contract TemiVault {
         assetOwner[assetId] = msg.sender;
         _ownedAssetIds[msg.sender].push(assetId);
 
+        totalAssetsRegistered += 1;
+        if (category == AssetCategory.FIXED_PROPERTY) totalSpatialCellsLocked += 1;
+
         emit AssetRegistered(msg.sender, assetId, category, declaredValue, h3CellIndex);
     }
 
@@ -620,6 +629,20 @@ contract TemiVault {
             conduitBackingAvailable,
             lastVerifiedSourceHeight,
             lastVerifiedChainKey
+        );
+    }
+
+    /// @notice Network reach, for the public landing page's live telemetry strip.
+    function registryTelemetry()
+        external
+        view
+        returns (uint256 assetsRegistered, uint256 spatialCellsLocked, uint256 crossChainProofs, uint256 crossChainValue)
+    {
+        return (
+            totalAssetsRegistered,
+            totalSpatialCellsLocked,
+            crossChainDepositsVerified,
+            crossChainValueVerified
         );
     }
 

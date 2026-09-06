@@ -501,7 +501,11 @@ function TrugiTab({
         Trugi NGN Exchange · virtual account
       </Badge>
 
-      <div className="ruled border border-hairline bg-card px-3.5 py-3">
+      <p className="text-[11.5px] leading-relaxed text-slate-soft">
+        NGN → Trugi settlement → PenguinSwap USD1 → TemiVault
+      </p>
+
+      <div className="border border-hairline bg-card px-3.5 py-3">
         <p className="eyebrow mb-2.5">Your dedicated virtual account</p>
         <CopyRow label="Bank" value="Providus Bank" mono={false} />
         <CopyRow label="Account" value="9902148821" />
@@ -509,9 +513,9 @@ function TrugiTab({
       </div>
 
       <p className="text-[12.5px] leading-relaxed text-slate-strong">
-        In production, an incoming NIBSS instant transfer to this account triggers an automated
-        relayer transaction on Creditcoin, and the operator never touches a wallet. For the demo,
-        fire that relayer execution yourself — it dispatches a real{' '}
+        An incoming NIBSS instant transfer to this account is settled by Trugi, swapped into
+        USD1 through PenguinSwap and routed to the vault — the merchant never touches a wallet.
+        For the demo, fire that relayer execution yourself: it dispatches a real{' '}
         <span className="tabular">depositReserve()</span> transaction to cc3-testnet.
       </p>
 
