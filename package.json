@@ -12,7 +12,8 @@
     "vendor:ocr": "node scripts/vendor-ocr.mjs",
     "prebuild": "node scripts/vendor-ocr.mjs",
     "predev": "node scripts/vendor-ocr.mjs",
-    "deploy:portal": "node scripts/deploy-portal.mjs"
+    "deploy:portal": "node scripts/deploy-portal.mjs",
+    "drift": "node scripts/check-drift.mjs"
   },
   "dependencies": {
     "canvas-confetti": "^1.9.4",
