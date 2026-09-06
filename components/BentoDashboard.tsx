@@ -34,6 +34,7 @@ import {
   formatAmount,
   formatTctc,
   parseTctc,
+  formatTctcExact,
   shortAssetId,
   truncateAddress,
   type Denomination,
@@ -713,7 +714,7 @@ function WithdrawModal({
           <div className="mb-1.5 flex items-baseline justify-between">
             <span className="eyebrow">Amount</span>
             <button
-              onClick={() => setAmount(formatTctc(available, 6))}
+              onClick={() => setAmount(formatTctcExact(available))}
               className="tabular focus-ring text-[10px] text-ink underline underline-offset-2"
             >
               max {formatTctc(available)} tCTC

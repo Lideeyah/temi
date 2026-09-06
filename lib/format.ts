@@ -24,6 +24,17 @@ export function formatAmount(wei: bigint, denomination: Denomination): string {
   return denomination === 'NGN' ? `₦${formatNgn(wei)}` : `${formatTctc(wei)} tCTC`;
 }
 
+/**
+ * Lossless wei -> decimal string, for values that will be parsed back into wei.
+ *
+ * `formatTctc` rounds for display, which is fine on a label and wrong in an input: rounding a
+ * balance UP and feeding it back produces an amount larger than the balance, and the contract
+ * reverts. Anything that round-trips through `parseTctc` must come from here.
+ */
+export function formatTctcExact(wei: bigint): string {
+  return formatUnits(wei, 18);
+}
+
 export function parseTctc(input: string): bigint {
   const cleaned = input.replace(/,/g, '').trim();
   if (!cleaned || Number.isNaN(Number(cleaned))) return 0n;

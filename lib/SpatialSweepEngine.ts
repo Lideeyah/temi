@@ -35,6 +35,9 @@ export const SWEEP_DURATION_MS = 3000;
 /** Keyframe capture points, in milliseconds from sweep start. */
 export const KEYFRAME_OFFSETS_MS = [0, 1500, 3000] as const;
 
+/** How long past the sweep window we wait before declaring the render loop stalled. */
+export const STALL_TIMEOUT_MS = 5000;
+
 /** Minimum accelerometer sigma. Below this the device is resting on something. */
 export const MIN_JITTER_SIGMA = 0.01;
 
@@ -300,6 +303,16 @@ export function captureKeyframe(video: HTMLVideoElement, t: number): Keyframe {
     throw new SweepError('ERR_CAMERA_UNAVAILABLE', 'ERR_CAMERA_UNAVAILABLE: no 2D context');
   }
 
+  // A video that has not produced a frame yet draws as a blank rectangle, which would read
+  // downstream as a perfectly coplanar scene and reject a legitimate claim. Fail loudly instead.
+  if (video.videoWidth === 0 || video.videoHeight === 0) {
+    throw new SweepError(
+      'ERR_CAMERA_UNAVAILABLE',
+      'ERR_CAMERA_UNAVAILABLE: camera produced no frame',
+      'The camera stream had not delivered a frame yet. Try the sweep again.',
+    );
+  }
+
   ctx.drawImage(video, 0, 0, ANALYSIS_WIDTH, ANALYSIS_HEIGHT);
   const image = ctx.getImageData(0, 0, ANALYSIS_WIDTH, ANALYSIS_HEIGHT);
 
@@ -477,6 +490,53 @@ export interface SweepProgress {
   keyframesCaptured: number;
 }
 
+/**
+ * Wait until the camera has actually painted a frame.
+ *
+ * `video.play()` resolves when playback *starts*, which is earlier than the first decoded frame
+ * being available — capturing at t=0 without this yields a blank keyframe.
+ */
+export async function waitForFirstFrame(video: HTMLVideoElement, timeoutMs = 4000): Promise<void> {
+  if (video.readyState >= 2 && video.videoWidth > 0) return;
+
+  await new Promise<void>((resolve, reject) => {
+    const deadline = setTimeout(() => {
+      cleanup();
+      reject(
+        new SweepError(
+          'ERR_CAMERA_UNAVAILABLE',
+          'ERR_CAMERA_UNAVAILABLE: camera never delivered a frame',
+          'The stream opened but produced no video. Check that no other app is holding the camera.',
+        ),
+      );
+    }, timeoutMs);
+
+    const check = () => {
+      if (video.readyState >= 2 && video.videoWidth > 0) {
+        cleanup();
+        resolve();
+      }
+    };
+
+    const cleanup = () => {
+      clearTimeout(deadline);
+      video.removeEventListener('loadeddata', check);
+      video.removeEventListener('canplay', check);
+      cancelAnimationFrame(raf);
+    };
+
+    let raf = 0;
+    const poll = () => {
+      check();
+      raf = requestAnimationFrame(poll);
+    };
+
+    video.addEventListener('loadeddata', check);
+    video.addEventListener('canplay', check);
+    raf = requestAnimationFrame(poll);
+  });
+}
+
 export interface RunSweepOptions {
   video: HTMLVideoElement;
   onProgress?: (progress: SweepProgress) => void;
@@ -502,34 +562,63 @@ export async function runSpatialSweep(options: RunSweepOptions): Promise<SweepTe
     await new Promise<void>((resolve, reject) => {
       let frame = 0;
 
+      // Anything thrown inside a requestAnimationFrame callback escapes this executor's scope,
+      // so without the try/catch a failed capture would leave the promise pending forever and
+      // freeze the modal mid-sweep. Every path out of `tick` must settle the promise.
       const tick = () => {
-        if (signal?.aborted) {
-          reject(new SweepError('ERR_INSUFFICIENT_FRAMES', 'Sweep cancelled'));
-          return;
+        try {
+          if (signal?.aborted) {
+            reject(new SweepError('ERR_INSUFFICIENT_FRAMES', 'Sweep cancelled'));
+            return;
+          }
+
+          const elapsed = performance.now() - startedAt;
+
+          while (frame < KEYFRAME_OFFSETS_MS.length && elapsed >= KEYFRAME_OFFSETS_MS[frame]) {
+            keyframes.push(captureKeyframe(video, elapsed));
+            frame++;
+          }
+
+          for (; sampleCursor < imu.samples.length; sampleCursor++) {
+            onSample?.(imu.samples[sampleCursor]);
+          }
+
+          onProgress?.({
+            elapsedMs: elapsed,
+            progress: Math.min(1, elapsed / SWEEP_DURATION_MS),
+            keyframesCaptured: keyframes.length,
+          });
+
+          if (elapsed >= SWEEP_DURATION_MS && keyframes.length >= KEYFRAME_OFFSETS_MS.length) {
+            resolve();
+            return;
+          }
+
+          // rAF is throttled to zero in a backgrounded tab. Without this the sweep would stall
+          // silently the moment the operator switched apps.
+          if (elapsed > SWEEP_DURATION_MS + STALL_TIMEOUT_MS) {
+            reject(
+              new SweepError(
+                'ERR_INSUFFICIENT_FRAMES',
+                'ERR_INSUFFICIENT_FRAMES: sweep stalled',
+                'The sweep stopped early — keep Tèmi in the foreground for the full three seconds.',
+              ),
+            );
+            return;
+          }
+
+          requestAnimationFrame(tick);
+        } catch (cause) {
+          reject(
+            cause instanceof SweepError
+              ? cause
+              : new SweepError(
+                  'ERR_CAMERA_UNAVAILABLE',
+                  'ERR_CAMERA_UNAVAILABLE: capture failed mid-sweep',
+                  cause instanceof Error ? cause.message : undefined,
+                ),
+          );
         }
-
-        const elapsed = performance.now() - startedAt;
-
-        while (frame < KEYFRAME_OFFSETS_MS.length && elapsed >= KEYFRAME_OFFSETS_MS[frame]) {
-          keyframes.push(captureKeyframe(video, elapsed));
-          frame++;
-        }
-
-        for (; sampleCursor < imu.samples.length; sampleCursor++) {
-          onSample?.(imu.samples[sampleCursor]);
-        }
-
-        onProgress?.({
-          elapsedMs: elapsed,
-          progress: Math.min(1, elapsed / SWEEP_DURATION_MS),
-          keyframesCaptured: keyframes.length,
-        });
-
-        if (elapsed >= SWEEP_DURATION_MS && keyframes.length >= KEYFRAME_OFFSETS_MS.length) {
-          resolve();
-          return;
-        }
-        requestAnimationFrame(tick);
       };
 
       requestAnimationFrame(tick);

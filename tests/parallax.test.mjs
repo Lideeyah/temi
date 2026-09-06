@@ -102,5 +102,24 @@ check('handheld device above 0.01 floor', sigHand >= 0.01);
 check('handheld passes contract gate (>=100)', Math.round(sigHand * 10000) >= 100);
 check('resting fails contract gate (<100)', Math.round(sigRest * 10000) < 100);
 
+// ---------------------------------------------------------------- //
+console.log('\n[6] Blank frames must not read as a valid coplanar scene');
+const blank = (t) => ({ t: t * 1500, webp: '', luma: new Float32Array(W * H), width: W, height: H });
+const tBlank = [measureTransition(blank(0), blank(1), 20), measureTransition(blank(1), blank(2), 20)];
+check('blank keyframes score 0', scoreParallax(tBlank) < 850, `got ${scoreParallax(tBlank)}`);
+
+// ---------------------------------------------------------------- //
+console.log('\n[7] Wei formatting round-trips without exceeding the source value');
+const { formatTctcExact, parseTctc } = await import('../lib/format.ts');
+const CASES = [
+  2500050000000000000n,      // rounds UP at 4dp -> would revert as InvalidClaimAmount
+  1234567890123456789n,      // rounds UP at 6dp -> would revert as InsufficientTier1
+  1n, 999999999999999999n, 10n ** 21n,
+];
+for (const wei of CASES) {
+  const round = parseTctc(formatTctcExact(wei));
+  check(`exact round-trip ${wei}`, round === wei, `got ${round}`);
+}
+
 console.log(failures === 0 ? '\nAll parallax + tremor assertions passed.\n' : `\n${failures} assertion(s) failed.\n`);
 process.exit(failures === 0 ? 0 : 1);

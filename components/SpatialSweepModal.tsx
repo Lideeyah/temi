@@ -23,11 +23,19 @@ import {
   computeJitterSigma,
   requestSensorPermission,
   runSpatialSweep,
+  waitForFirstFrame,
   type AccelSample,
   type SweepTelemetry,
 } from '@/lib/SpatialSweepEngine';
 import { verifySpatialLock, cellIndexToH3, SpatialLockError } from '@/lib/H3SpatialLock';
-import { formatTctc, formatNgn, parseTctc, shortAssetId, truncateHash } from '@/lib/format';
+import {
+  formatTctc,
+  formatTctcExact,
+  formatNgn,
+  parseTctc,
+  shortAssetId,
+  truncateHash,
+} from '@/lib/format';
 import type { VaultAsset } from '@/hooks/useVault';
 import { SensorOscilloscope } from './SensorOscilloscope';
 import { Badge, Button, Field, MetricRow, Modal, Notice, StatusDot, TextInput } from './ui/Primitives';
@@ -97,7 +105,7 @@ export function SpatialSweepModal({
   const assetKey = asset?.assetId ?? null;
   const declaredValue = asset?.declaredValue ?? 0n;
   useEffect(() => {
-    if (assetKey && open) setLossInput(formatTctc(declaredValue, 4));
+    if (assetKey && open) setLossInput(formatTctcExact(declaredValue));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assetKey, open]);
 
@@ -156,21 +164,34 @@ export function SpatialSweepModal({
     }
 
     // 2. Rear camera.
+    let video: HTMLVideoElement;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } },
         audio: false,
       });
       streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
+
+      // The <video> only mounts once the phase leaves 'brief', and React may not have
+      // committed that render yet. Wait for the element rather than asserting it exists.
+      const element = await waitForElement(videoRef);
+      if (!element) {
+        fail('ERR_CAMERA_UNAVAILABLE', 'ERR_CAMERA_UNAVAILABLE: viewfinder unavailable');
+        return;
       }
+      video = element;
+      video.srcObject = stream;
+      await video.play();
+      // play() resolves before the first frame is decoded; capturing at t=0 without this
+      // would hand the parallax engine a blank frame and reject a legitimate claim.
+      await waitForFirstFrame(video);
     } catch (cause) {
+      const sweepError = cause as SweepError;
       fail(
-        'ERR_CAMERA_UNAVAILABLE',
-        'ERR_CAMERA_UNAVAILABLE: camera access refused',
-        cause instanceof Error ? cause.message : 'Tèmi needs the rear camera to observe depth.',
+        sweepError.code ?? 'ERR_CAMERA_UNAVAILABLE',
+        sweepError.code ? sweepError.message : 'ERR_CAMERA_UNAVAILABLE: camera access refused',
+        sweepError.detail ??
+          (cause instanceof Error ? cause.message : 'Tèmi needs the rear camera to observe depth.'),
       );
       return;
     }
@@ -183,7 +204,7 @@ export function SpatialSweepModal({
     let result: SweepTelemetry;
     try {
       result = await runSpatialSweep({
-        video: videoRef.current!,
+        video,
         signal: controller.signal,
         onProgress: (p) => setProgress(p.progress),
         onSample: (sample) => setSamples((prev) => [...prev, sample]),
@@ -550,6 +571,24 @@ export function SpatialSweepModal({
       ) : null}
     </Modal>
   );
+}
+
+/**
+ * Resolve once a ref has been populated by React's commit, or give up.
+ *
+ * The viewfinder mounts as a result of a `setPhase` earlier in the same async function, and
+ * there is no guarantee that render has flushed by the time we need the element.
+ */
+async function waitForElement(
+  ref: React.RefObject<HTMLVideoElement | null>,
+  timeoutMs = 2000,
+): Promise<HTMLVideoElement | null> {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    if (ref.current) return ref.current;
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+  }
+  return ref.current;
 }
 
 /** Per-transition parallax detail — shown on rejection so the operator can see what failed. */

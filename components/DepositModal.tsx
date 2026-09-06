@@ -239,7 +239,7 @@ function AttestcoinTab({
       });
       setStage('error');
     }
-  }, [walletClient, account, sepTxHash, chainKey, attestedHeight, onDeposited]);
+  }, [walletClient, account, sepTxHash, chainKey, onDeposited]);
 
   const busy = stage === 'proving' || stage === 'waiting' || stage === 'previewing' || stage === 'submitting';
 
