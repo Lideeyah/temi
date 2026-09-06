@@ -43,6 +43,7 @@ import { cn } from '@/lib/utils';
 import { DepositModal } from './DepositModal';
 import { RegisterAssetModal } from './RegisterAssetModal';
 import { SpatialSweepModal } from './SpatialSweepModal';
+import { LiveValuationCard } from './LiveValuationCard';
 import { Badge, Button, MetricRow, Modal, Notice, StatusDot, TextInput } from './ui/Primitives';
 
 export function BentoDashboard() {
@@ -136,7 +137,12 @@ export function BentoDashboard() {
             connected={Boolean(wallet.address)}
           />
 
-          <AttestcoinConsole vault={vault} money={money} />
+          <AttestcoinConsole
+            vault={vault}
+            money={money}
+            walletClient={wallet.walletClient}
+            account={wallet.address}
+          />
         </div>
       </main>
 
@@ -568,9 +574,13 @@ function AssetCard({
 function AttestcoinConsole({
   vault,
   money,
+  walletClient,
+  account,
 }: {
   vault: ReturnType<typeof useVault>;
   money: (wei: bigint) => string;
+  walletClient: ReturnType<typeof useWallet>['walletClient'];
+  account: ReturnType<typeof useWallet>['address'];
 }) {
   const [attestedHeight, setAttestedHeight] = useState<number | null>(null);
   const [proverUp, setProverUp] = useState<boolean | null>(null);
@@ -619,6 +629,13 @@ function AttestcoinConsole({
           value={t && t.lastSourceHeight > 0n ? t.lastSourceHeight.toString() : '—'}
         />
         <MetricRow label="Read cost" value="0 ATC" tone="moss" />
+
+        <LiveValuationCard
+          oracle={vault.oracle}
+          walletClient={walletClient}
+          account={account}
+          onRefreshed={() => void vault.refresh()}
+        />
 
         <div className="my-2.5 h-px bg-hairline" />
 

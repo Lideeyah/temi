@@ -22,7 +22,7 @@ export function artifact(name) {
 export const addr = (hex) => new Address(hexToBytes(hex));
 
 export async function createChain() {
-  const common = new Common({ chain: Chain.Mainnet, hardfork: Hardfork.Shanghai });
+  const common = new Common({ chain: Chain.Mainnet, hardfork: Hardfork.Cancun });
   const stateManager = new DefaultStateManager();
   const evm = await EVM.create({ common, stateManager });
 
@@ -40,6 +40,20 @@ export async function createChain() {
     stateManager,
     fund,
     balanceOf,
+
+    /**
+     * Install arbitrary runtime code at an address.
+     *
+     * Used to stand a stub in at 0x0FD2. The Attestcoin verifier is a runtime precompile that
+     * does not exist in a bare EVM, so without this the entire cross-chain path would be
+     * untestable offline. The stub only ever answers "the proof verified" — every assertion
+     * about what the vault does *with* a verified payload is still against the real bytecode.
+     */
+    async setCode(who, runtimeHex) {
+      const account = (await stateManager.getAccount(addr(who))) ?? new Account();
+      await stateManager.putAccount(addr(who), account);
+      await stateManager.putContractCode(addr(who), hexToBytes(runtimeHex));
+    },
 
     async deploy(name, args = [], deployer, value = 0n) {
       const { abi, bytecode } = artifact(name);
@@ -64,7 +78,7 @@ export async function createChain() {
     },
 
     /** Call a function. Returns { ok, value, revert } — never throws on a revert. */
-    async call(contract, functionName, args = [], { from, value = 0n } = {}) {
+    async call(contract, functionName, args = [], { from, value = 0n, timestamp } = {}) {
       const data = encodeFunctionData({ abi: contract.abi, functionName, args });
       const result = await evm.runCall({
         caller: addr(from),
@@ -73,6 +87,9 @@ export async function createChain() {
         data: hexToBytes(data),
         value,
         gasLimit: 30_000_000n,
+        ...(timestamp === undefined
+          ? {}
+          : { block: { header: { number: 1n, timestamp, cliqueSigner: () => addr(from) } } }),
       });
 
       const returned = bytesToHex(result.execResult.returnValue);

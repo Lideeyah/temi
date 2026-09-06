@@ -45,6 +45,26 @@ TemiSourcePortal                 attestors reach quorum
 > only — confirmed against the live prover, which rejects every other key. Base Sepolia is not
 > provable here, so Tèmi's source portal targets Ethereum Sepolia.
 
+### Live valuation through the same precompile
+
+Attestcoin is not just the onboarding rail. A cross-chain deposit arrives denominated in the
+source chain's asset, so the vault prices it by *reading Chainlink off Ethereum* — proving a
+`transmit` transaction's inclusion via `0x0FD2` and taking the price out of the resulting
+`AnswerUpdated` log.
+
+`current` and `roundId` are both indexed, so the price sits in `topics[1]`, not the data payload:
+
+```
+answerWad = uint256(topics[1]) * 1e10     // Chainlink 8dp -> vault 18dp
+require roundId > lastRoundId             // blocks replaying a favourable historical round
+require now <= updatedAt + 6 hours        // backstop against a dead feed
+```
+
+Refreshing is permissionless — anyone can push a newer round, nobody can push an older one — and
+if the observation goes stale the vault refuses to price a deposit rather than guessing. The one
+trusted input left is tCTC/USD, a governance parameter until an attested CTC feed exists, and the
+UI labels it separately from the proven leg.
+
 ### Why the beneficiary cannot be spoofed
 
 `verifyAndDeposit` credits the operator named **inside the attested log**, never the caller. Any
@@ -163,6 +183,9 @@ deployer at <https://faucet.creditcoin.org> first.
   storage, real reverts, real value transfers. Covers the 85/15 split, global asset identity,
   both attestation gates, the serial-plate gate, the spatial lock, unencumbered withdrawal,
   write-once portal configuration, vault solvency, and the multi-asset drain attack.
+- `tests/oracle.test.mjs` — the live-valuation path against the real bytecode, with a stub
+  verifier standing in at `0x0FD2`: the indexed-topic decode checked against a genuine Sepolia
+  log, 8→18 decimal scaling, monotonic rounds, the staleness backstop, and conversion.
 - `tests/serial.test.mjs` — the serial matcher against real OCR failure modes.
 - `tests/parallax.test.mjs` — the parallax discriminator and tremor gate on synthetic scenes.
 - `tests/attestcoin.test.mjs` — pulls a real attested Sepolia transaction, fetches a real proof,
@@ -195,6 +218,7 @@ lib/
   H3SpatialLock.ts         high-accuracy GPS → H3 res-10 cell
   SerialPlateReader.ts     on-device OCR + hash-matching of the serial plate
   AttestcoinConduit.ts     proof-builder client + ABI packing
+  ChainlinkOracle.ts       finds a provable price round and packs it for submitPriceProof
 components/
   landing/                 public landing page: value equation + live telemetry strip
   BentoDashboard.tsx       reserve · incident · inventory · Attestcoin telemetry console

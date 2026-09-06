@@ -416,6 +416,49 @@ TemiSourcePortal
                 transaction is rejected even though it is perfectly provable.
               </P>
 
+              <H3>The same path, used for live valuation</H3>
+              <P>
+                Attestcoin is not only an onboarding step in Tèmi. A cross-chain deposit arrives
+                denominated in the source chain&apos;s asset, and crediting it 1:1 into a
+                tCTC-denominated reserve would simply be wrong. So the vault prices it by reading
+                Chainlink off Ethereum through the same precompile.
+              </P>
+              <Code label="TemiVault.submitPriceProof">{`0x0FD2 proves a Chainlink transmit tx was included in an attested block
+      ↓
+AnswerUpdated(int256 indexed current, uint256 indexed roundId, uint256 updatedAt)
+      ↓
+current and roundId are INDEXED, so:
+  topics[1] = the price      (8 decimals)
+  topics[2] = the round id
+  data      = updatedAt      (source-chain time)
+      ↓
+answerWad = uint256(answer) * 1e10        // 8dp -> 18dp
+require roundId > lastRoundId             // blocks a replayed favourable round
+require now <= updatedAt + 6 hours        // backstop against a dead feed
+require answer > 0                        // a Chainlink answer is signed`}</Code>
+              <P>
+                Three guards, doing different work. The monotonic round id is the one that
+                matters: without it, anyone could resurrect a favourable historical round and
+                submit it during a swing. The staleness window is an outer backstop for a feed
+                that has stopped writing altogether, and it is deliberately loose — two latencies
+                stack, since the Sepolia ETH/USD feed only writes roughly hourly and the attestor
+                quorum trails Sepolia&apos;s head by around thirty-five blocks before a proof can
+                be built at all. A tight window would make the feed unusable rather than safe.
+              </P>
+              <P>
+                Refreshing the price is permissionless. Anyone can push a newer round, nobody can
+                push an older one, and if the last observation goes stale the vault refuses to
+                price a deposit rather than falling back to a guess. There is no privileged price
+                setter to compromise. The one trusted input left is tCTC/USD, which stays a
+                governance parameter because no attested CTC feed exists on any chain the
+                cc3-testnet quorum covers — and the interface labels it as such rather than
+                blending it in with the proven leg.
+              </P>
+              <Claim>
+                Attestcoin stops being an onboarding step and becomes the contract&apos;s
+                operational price source — no oracle operator, no bridge, no push.
+              </Claim>
+
               <H3>Two properties that matter</H3>
               <P>
                 <strong>The beneficiary is read out of the proof, never from calldata.</strong>{' '}
@@ -485,6 +528,16 @@ TemiSourcePortal
                     'Claiming a shop you are not at',
                     'Live H3 cell must equal the registered cell, checked on-chain.',
                     'By construction.',
+                  ],
+                  [
+                    'Replaying a favourable historical price round',
+                    'Round ids must strictly increase, and an observation older than 6h is refused outright.',
+                    'Yes — bytecode test: resubmitting a round and submitting an earlier one both revert with NonMonotonicRound.',
+                  ],
+                  [
+                    'Spoofing a price from another contract',
+                    'The AnswerUpdated log must come from the aggregator registered for that chain key.',
+                    'Yes — bytecode test: a log from an impostor address reverts with AnswerUpdatedLogNotFound.',
                   ],
                   [
                     'Compromised treasury repointing the source portal',
@@ -595,11 +648,15 @@ TemiSourcePortal
                 impersonation surface to seven cells.
               </P>
 
-              <H3>Cross-chain value is credited 1:1 with no price feed</H3>
+              <H3>Half the valuation is still a governance parameter</H3>
               <P>
-                A deposit of 1 ETH on Sepolia currently credits 1 tCTC of reserve. On testnet
-                this is harmless; in production it requires an oracle, and the absence of one is
-                a correctness gap, not a simplification.
+                ETH/USD is now proven from Ethereum through the precompile, so the source leg of
+                the conversion is trustless. The other leg — tCTC/USD — is set by the treasury,
+                because no attested CTC/USD feed exists on Ethereum Sepolia or Ethereum Mainnet,
+                the only chains the cc3-testnet quorum covers. A dishonest treasury could
+                therefore still misprice cross-chain intake, bounded by the conduit float. The
+                fix is a CTC feed on an attested chain; until then the parameter is surfaced
+                separately in the UI so nobody mistakes it for a proven price.
               </P>
 
               <H3>The conduit float is a centralisation point</H3>
@@ -646,6 +703,9 @@ TemiSourcePortal
                   ['Spatial resolution', 'H3 res 10 (~66 m²)', 'on-chain exact match'],
                   ['Settlement chain', `cc3-testnet ${creditcoinTestnet.id}`, '—'],
                   ['Attestcoin source chain', 'Ethereum Sepolia, key 1', 'trustedSourcePortal, write-once'],
+                  ['Oracle staleness window', '6 hours', 'MAX_ORACLE_STALENESS'],
+                  ['Oracle scaling', '8dp → 18dp (×1e10)', 'ORACLE_SCALE_TO_WAD'],
+                  ['Price feed', 'Chainlink ETH/USD, Sepolia', 'trustedPriceFeed, write-once'],
                   ['Verify precompile', ATTESTCOIN_VERIFIER_ADDRESS, '0x0FD2'],
                 ]}
               />

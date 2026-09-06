@@ -115,5 +115,46 @@ try {
 } catch { rejected = true; }
 check('forged merkle root reverts in the precompile', rejected);
 
+// ---------------------------------------------------------------- //
+console.log('\n[8] Live valuation — a provable Chainlink round exists right now');
+const { findProvableRound, resolveAggregator, buildPriceProof } = await import('../lib/ChainlinkOracle.ts');
+
+const { aggregator, description } = await resolveAggregator();
+console.log(`  ${description} aggregator ${aggregator}`);
+check('aggregator resolved from the proxy', /^0x[0-9a-fA-F]{40}$/.test(aggregator));
+
+const round = await findProvableRound({ aggregator });
+console.log(`  round ${round.roundId}  $${round.price}  ${Math.round(round.ageSeconds / 60)}m old  block ${round.blockNumber}`);
+check('round is at or below the attested height', round.blockNumber <= BigInt(attested));
+check('round is inside the 6h staleness window', round.ageSeconds <= 6 * 3600, `${Math.round(round.ageSeconds / 60)}m`);
+check('answer is positive', round.answer > 0n);
+
+const { proof: priceProof, raw: priceRaw } = await buildPriceProof(round);
+console.log(`  proof: block ${priceRaw.headerNumber}, ${priceRaw.merkleProof.siblings.length} siblings, ${((priceProof.length - 2) / 2).toLocaleString()} bytes calldata`);
+check('proof builder returns a proof for the round', priceRaw.headerNumber === Number(round.blockNumber));
+
+// The precompile is the real arbiter — ask it directly.
+const priceVerified = await CC3.call({
+  to: PRECOMPILE,
+  data: encodeFunctionData({
+    abi: VERIFY_ABI, functionName: 'verify',
+    args: [BigInt(priceRaw.chainKey), BigInt(priceRaw.headerNumber), priceRaw.txBytes,
+      { root: priceRaw.merkleProof.root, siblings: priceRaw.merkleProof.siblings.map(s => ({ hash: s.hash, isLeft: s.isLeft })) },
+      { lowerEndpointDigest: priceRaw.continuityProof.lowerEndpointDigest, roots: priceRaw.continuityProof.roots }],
+  }),
+});
+check('0x0FD2 verifies the price round', decodeFunctionResult({ abi: VERIFY_ABI, functionName: 'verify', data: priceVerified.data }) === true);
+
+// And the log inside it must be the one the contract looks for.
+const [, priceChunks] = decodeAbiParameters(parseAbiParameters('uint8, bytes[]'), priceRaw.txBytes);
+const priceReceipt = decodeAbiParameters(
+  parseAbiParameters('uint8 status, uint64 gasUsed, (address emitter, bytes32[] topics, bytes data)[] logs, bytes logsBloom'),
+  priceChunks[priceChunks.length - 1]);
+const ANSWER_TOPIC = '0x0559884fd3a460db3073b7fc896cc77986f16e378210ded43186175bf646fc5f';
+const priceLog = priceReceipt[2].find(l => l.emitter.toLowerCase() === aggregator.toLowerCase() && l.topics[0] === ANSWER_TOPIC);
+check('the proven tx carries an AnswerUpdated log from the aggregator', priceLog !== undefined);
+check('price recovers from topics[1]', priceLog && BigInt(priceLog.topics[1]) === round.answer, priceLog && `${BigInt(priceLog.topics[1])}`);
+check('roundId recovers from topics[2]', priceLog && BigInt(priceLog.topics[2]) === round.roundId);
+
 console.log(failures === 0 ? '\nAttestcoin readability path verified end-to-end against live infrastructure.\n' : `\n${failures} assertion(s) failed.\n`);
 process.exit(failures === 0 ? 0 : 1);

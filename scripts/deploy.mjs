@@ -9,7 +9,7 @@
  *
  * Usage:
  *   PRIVATE_KEY=0x... npm run deploy
- *   PRIVATE_KEY=0x... SEPOLIA_PRIVATE_KEY=0x... CONDUIT_FLOAT=2.0 npm run deploy
+ *   PRIVATE_KEY=0x... SEPOLIA_PRIVATE_KEY=0x... CONDUIT_FLOAT=2.0 CTC_USD=0.90 npm run deploy
  *
  * Faucet: https://faucet.creditcoin.org
  */
@@ -35,6 +35,13 @@ const sepolia = defineChain({
 });
 
 const ATTESTCOIN_CHAIN_KEY_SEPOLIA = 1n;
+
+/**
+ * Chainlink ETH/USD on Sepolia. The vault must trust the *aggregator*, not the proxy, because
+ * AnswerUpdated is emitted by the aggregator behind it. Resolved live so a feed rotation is
+ * picked up rather than hardcoded stale.
+ */
+const SEPOLIA_ETH_USD_PROXY = '0x694AA1769357215DE4FAC081bf1f309aDC325306';
 
 function artifact(name) {
   const p = path.join(process.cwd(), 'artifacts', `${name}.json`);
@@ -124,6 +131,40 @@ if (portalAddress) {
   });
   await ccPublic.waitForTransactionReceipt({ hash: wireTx });
   console.log('  wired.');
+}
+
+// ---- Chainlink price feed for live valuation ----
+try {
+  const sepPublic = createPublicClient({ chain: sepolia, transport: http() });
+  const aggregator = await sepPublic.readContract({
+    address: SEPOLIA_ETH_USD_PROXY,
+    abi: [{ type: 'function', name: 'aggregator', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }] }],
+    functionName: 'aggregator',
+  });
+  console.log(`\nRegistering the Chainlink ETH/USD aggregator (${aggregator})…`);
+  const feedTx = await ccWallet.writeContract({
+    address: vaultAddress,
+    abi: vaultArtifact.abi,
+    functionName: 'setTrustedPriceFeed',
+    args: [ATTESTCOIN_CHAIN_KEY_SEPOLIA, aggregator],
+  });
+  await ccPublic.waitForTransactionReceipt({ hash: feedTx });
+  console.log('  registered.');
+} catch (cause) {
+  console.warn(`  could not register the price feed: ${cause.message}`);
+}
+
+const ctcUsd = process.env.CTC_USD ?? '0.90';
+if (Number(ctcUsd) > 0) {
+  console.log(`\nSetting tCTC/USD to ${ctcUsd} (governance parameter)…`);
+  const priceTx = await ccWallet.writeContract({
+    address: vaultAddress,
+    abi: vaultArtifact.abi,
+    functionName: 'setCtcUsdPrice',
+    args: [parseEther(ctcUsd)],
+  });
+  await ccPublic.waitForTransactionReceipt({ hash: priceTx });
+  console.log('  set.');
 }
 
 const float = process.env.CONDUIT_FLOAT;

@@ -74,6 +74,23 @@ contract TemiVault {
     /// @notice Attestcoin chain key for Ethereum Sepolia on cc3-testnet.
     uint64 public constant CHAIN_KEY_ETHEREUM_SEPOLIA = 1;
 
+    /// @notice topic0 of Chainlink's `AnswerUpdated(int256,uint256,uint256)`.
+    /// @dev    `current` and `roundId` are both indexed, so a valid log carries three topics and
+    ///         the price lives in topics[1] — not in the data payload, which holds only updatedAt.
+    bytes32 public constant ANSWER_UPDATED_TOPIC =
+        keccak256("AnswerUpdated(int256,uint256,uint256)");
+
+    /// @notice Chainlink USD feeds report 8 decimals; the vault works in 18.
+    uint256 public constant ORACLE_SCALE_TO_WAD = 1e10;
+
+    /// @notice How old a proven price may be before the vault refuses to price anything with it.
+    /// @dev    Deliberately loose. Two latencies stack: the Sepolia ETH/USD feed only writes on
+    ///         a heartbeat or a deviation (roughly hourly in practice on testnet), and the
+    ///         Attestcoin quorum trails Sepolia's head by ~35 blocks before a proof can even be
+    ///         built. A tight window would make the feed unusable rather than safe. Monotonic
+    ///         round ids do the real anti-cherry-picking work; this is the outer backstop.
+    uint256 public constant MAX_ORACLE_STALENESS = 6 hours;
+
     /// @notice Attestcoin chain keys the vault will accept proofs from, mapped to the portal
     ///         address that is authoritative on that chain. cc3-testnet supports key 1
     ///         (Ethereum Sepolia) and key 3 (Ethereum Mainnet).
@@ -99,6 +116,33 @@ contract TemiVault {
     uint64 public lastVerifiedChainKey;
 
     address public treasury;
+
+    /// @notice Chainlink aggregator this vault will accept price proofs from, per chain key.
+    /// @dev    Write-once, for the same reason as the source portal.
+    mapping(uint64 => address) public trustedPriceFeed;
+
+    struct PriceObservation {
+        /// @notice USD per unit of the source asset, scaled to 18 decimals.
+        uint256 answerWad;
+        /// @notice Chainlink round id. Strictly increasing; this is what blocks a replayed dip.
+        uint256 roundId;
+        /// @notice When the feed itself last wrote, in source-chain time.
+        uint256 updatedAt;
+        /// @notice When Creditcoin accepted the proof.
+        uint256 provenAt;
+        /// @notice Source-chain block the proof was drawn from.
+        uint64 sourceHeight;
+    }
+
+    /// @notice The most recent price read out of Ethereum through the Attestcoin precompile.
+    PriceObservation public sourceAssetUsd;
+
+    /// @notice USD per tCTC, 18 decimals.
+    /// @dev    The honest gap in this design. Sepolia carries an ETH/USD feed we can prove
+    ///         trustlessly; there is no CTC/USD feed on any chain the cc3-testnet attestor set
+    ///         covers, so this leg stays a governance parameter until one exists. Both legs are
+    ///         surfaced in the UI so nobody has to guess which is which.
+    uint256 public ctcUsdWad;
 
     /* ------------------------------------------------------------------ */
     /*                            CONSTANTS                                */
@@ -172,6 +216,18 @@ contract TemiVault {
     );
 
     event ConduitLiquidityFunded(address indexed underwriter, uint256 amount, uint256 available);
+
+    event PriceObserved(
+        uint64 indexed chainKey,
+        uint64 indexed sourceHeight,
+        address indexed aggregator,
+        uint256 answerWad,
+        uint256 roundId,
+        uint256 updatedAt
+    );
+
+    event CtcUsdPriceSet(uint256 previousWad, uint256 newWad);
+    event TrustedPriceFeedSet(uint64 indexed chainKey, address aggregator);
     event TrustedSourcePortalSet(uint64 indexed chainKey, address portal);
 
     event AssetRegistered(
@@ -225,6 +281,14 @@ contract TemiVault {
     error PortalAlreadyConfigured(uint64 chainKey);
     error InvalidPortal();
     error SerialPlateMismatch(bytes32 observed, bytes32 expected);
+    error PriceFeedNotConfigured(uint64 chainKey);
+    error PriceFeedAlreadyConfigured(uint64 chainKey);
+    error AnswerUpdatedLogNotFound(address expectedAggregator);
+    error InvalidPriceAnswer(int256 answer);
+    error NonMonotonicRound(uint256 submitted, uint256 current);
+    error StalePriceObservation(uint256 updatedAt, uint256 nowTimestamp);
+    error NoPriceObservation();
+    error CtcPriceUnset();
 
     modifier nonReentrant() {
         if (_reentrancyLock == 1) revert Reentrancy();
@@ -341,15 +405,20 @@ contract TemiVault {
         }
         if (!found) revert ReserveFundedLogNotFound(portal);
         if (amount != attestedAmount) revert AmountMismatch(amount, attestedAmount);
-        if (attestedAmount > conduitBackingAvailable) {
-            revert InsufficientConduitBacking(attestedAmount, conduitBackingAvailable);
+
+        // The attested amount is denominated in the source chain's native asset. Price it
+        // through the rate this vault proved for itself out of Ethereum, rather than pretending
+        // one ETH is one tCTC.
+        uint256 creditedAmount = convertSourceValueToTctc(attestedAmount);
+        if (creditedAmount > conduitBackingAvailable) {
+            revert InsufficientConduitBacking(creditedAmount, conduitBackingAvailable);
         }
 
         processedTxHashes[sepTxHash] = true;
         consumedAttestation[attestationKey] = true;
-        conduitBackingAvailable -= attestedAmount;
+        conduitBackingAvailable -= creditedAmount;
         crossChainDepositsVerified += 1;
-        crossChainValueVerified += attestedAmount;
+        crossChainValueVerified += creditedAmount;
         lastVerifiedSourceHeight = height;
         lastVerifiedChainKey = chainKey;
 
@@ -361,12 +430,12 @@ contract TemiVault {
             attestationKey,
             portal,
             depositor,
-            attestedAmount
+            creditedAmount
         );
-        emit AttestcoinReserveCredited(sepTxHash, attestedAmount);
+        emit AttestcoinReserveCredited(sepTxHash, creditedAmount);
 
-        _creditReserve(operator, attestedAmount);
-        credited = attestedAmount;
+        _creditReserve(operator, creditedAmount);
+        credited = creditedAmount;
     }
 
     /// @notice Read-only dry run of a proof bundle. Uses the precompile's `view` overload so the
@@ -403,6 +472,150 @@ contract TemiVault {
             attestedAmount = abi.decode(logs[i].data, (uint256));
             break;
         }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*            ATTESTCOIN LIVE VALUATION (CHAINLINK READ)               */
+    /* ------------------------------------------------------------------ */
+
+    /// @notice Decode a Chainlink `AnswerUpdated` log.
+    /// @dev    Pure and public so the decoding can be tested directly, without a proof.
+    ///         Both `current` and `roundId` are indexed, so the layout is:
+    ///           topics[0] = keccak256("AnswerUpdated(int256,uint256,uint256)")
+    ///           topics[1] = int256  current   (the price, at the feed's own decimals)
+    ///           topics[2] = uint256 roundId
+    ///           data      = uint256 updatedAt
+    function decodeAnswerUpdated(bytes32[] memory topics, bytes memory data)
+        public
+        pure
+        returns (int256 answer, uint256 roundId, uint256 updatedAt)
+    {
+        answer = int256(uint256(topics[1]));
+        roundId = uint256(topics[2]);
+        updatedAt = abi.decode(data, (uint256));
+    }
+
+    /// @notice Read a Chainlink price update off Ethereum and adopt it as the vault's rate.
+    ///
+    /// @dev    This is the same Attestcoin readability path the deposit rail uses, pointed at a
+    ///         different contract. The precompile proves a Chainlink `transmit` transaction was
+    ///         included in an attested Ethereum block; we then read the `AnswerUpdated` log out
+    ///         of its receipt. No oracle operator, no bridge, and no price is ever pushed to
+    ///         Creditcoin — the vault pulls it and verifies inclusion itself.
+    ///
+    ///         Three guards, in order of how much work they do:
+    ///           - the round id must strictly increase, which is what actually prevents someone
+    ///             replaying a favourable historical round;
+    ///           - the observation must be within MAX_ORACLE_STALENESS, as an outer backstop
+    ///             against a feed that has stopped writing altogether;
+    ///           - the answer must be positive, since a Chainlink answer is a signed integer.
+    ///
+    /// @param proof Same encoding as `verifyAndDeposit`: abi.encode(chainKey, height, txBytes,
+    ///              MerkleProof, ContinuityProof) straight from the proof builder.
+    function submitPriceProof(bytes calldata proof)
+        external
+        returns (uint256 answerWad, uint256 roundId)
+    {
+        (
+            uint64 chainKey,
+            uint64 height,
+            bytes memory encodedTransaction,
+            INativeQueryVerifier.MerkleProof memory merkleProof,
+            INativeQueryVerifier.ContinuityProof memory continuityProof
+        ) = abi.decode(
+            proof,
+            (uint64, uint64, bytes, INativeQueryVerifier.MerkleProof, INativeQueryVerifier.ContinuityProof)
+        );
+
+        address aggregator = trustedPriceFeed[chainKey];
+        if (aggregator == address(0)) revert PriceFeedNotConfigured(chainKey);
+
+        bool verified = ATTESTCOIN_VERIFIER.verifyAndEmit(
+            chainKey,
+            height,
+            encodedTransaction,
+            merkleProof,
+            continuityProof
+        );
+        if (!verified) revert AttestcoinVerificationFailed();
+
+        (, EvmTxDecoder.EvmLog[] memory logs) = EvmTxDecoder.decode(encodedTransaction);
+
+        int256 answer;
+        uint256 updatedAt;
+        bool found;
+        for (uint256 i = 0; i < logs.length; i++) {
+            EvmTxDecoder.EvmLog memory entry = logs[i];
+            if (entry.emitter != aggregator) continue;
+            // current + roundId indexed => topic0 plus two.
+            if (entry.topics.length != 3) continue;
+            if (entry.topics[0] != ANSWER_UPDATED_TOPIC) continue;
+
+            (answer, roundId, updatedAt) = decodeAnswerUpdated(entry.topics, entry.data);
+            found = true;
+            break;
+        }
+        if (!found) revert AnswerUpdatedLogNotFound(aggregator);
+        if (answer <= 0) revert InvalidPriceAnswer(answer);
+        if (roundId <= sourceAssetUsd.roundId) {
+            revert NonMonotonicRound(roundId, sourceAssetUsd.roundId);
+        }
+        if (block.timestamp > updatedAt + MAX_ORACLE_STALENESS) {
+            revert StalePriceObservation(updatedAt, block.timestamp);
+        }
+
+        // 8 decimals at the feed, 18 everywhere in this contract.
+        answerWad = uint256(answer) * ORACLE_SCALE_TO_WAD;
+
+        sourceAssetUsd = PriceObservation({
+            answerWad: answerWad,
+            roundId: roundId,
+            updatedAt: updatedAt,
+            provenAt: block.timestamp,
+            sourceHeight: height
+        });
+
+        emit PriceObserved(chainKey, height, aggregator, answerWad, roundId, updatedAt);
+    }
+
+    /// @notice Whether the last proven price is still inside the staleness window.
+    function isPriceFresh() public view returns (bool) {
+        return
+            sourceAssetUsd.updatedAt != 0 &&
+            block.timestamp <= sourceAssetUsd.updatedAt + MAX_ORACLE_STALENESS;
+    }
+
+    /// @notice Convert an amount of the source chain's native asset into tCTC at the proven rate.
+    /// @dev    Reverts rather than falling back to a guess. A silent 1:1 fallback is exactly the
+    ///         kind of default that quietly mis-credits a reserve.
+    function convertSourceValueToTctc(uint256 sourceWei) public view returns (uint256) {
+        if (sourceAssetUsd.updatedAt == 0) revert NoPriceObservation();
+        if (!isPriceFresh()) {
+            revert StalePriceObservation(sourceAssetUsd.updatedAt, block.timestamp);
+        }
+        if (ctcUsdWad == 0) revert CtcPriceUnset();
+
+        // sourceWei * (USD per source unit) / (USD per tCTC). Both rates are 18dp, so the
+        // scaling cancels and the result is back in wei of tCTC.
+        return (sourceWei * sourceAssetUsd.answerWad) / ctcUsdWad;
+    }
+
+    /// @notice Register the Chainlink aggregator this vault reads prices from. Write-once.
+    function setTrustedPriceFeed(uint64 chainKey, address aggregator) external onlyTreasury {
+        if (trustedPriceFeed[chainKey] != address(0)) revert PriceFeedAlreadyConfigured(chainKey);
+        if (aggregator == address(0)) revert InvalidPortal();
+
+        trustedPriceFeed[chainKey] = aggregator;
+        emit TrustedPriceFeedSet(chainKey, aggregator);
+    }
+
+    /// @notice Set USD per tCTC, 18 decimals.
+    /// @dev    Mutable, unlike the feed addresses, because it has to track a real market and no
+    ///         attested CTC/USD feed exists yet. This is the one trusted input left in the
+    ///         valuation path and it is labelled as such in the UI.
+    function setCtcUsdPrice(uint256 newWad) external onlyTreasury {
+        emit CtcUsdPriceSet(ctcUsdWad, newWad);
+        ctcUsdWad = newWad;
     }
 
     /// @notice Top up the tCTC float that backs cross-chain credits.
