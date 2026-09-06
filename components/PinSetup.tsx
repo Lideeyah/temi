@@ -37,9 +37,31 @@ export function PinSetup({
   const [biometric, setBiometric] = useState(false);
   const [stage, setStage] = useState<'set' | 'confirm'>('set');
 
+  const isWeak = (value: string) => /^(\d)\1{3}$/.test(value);
+
   const mismatch = confirm.length === 4 && confirm !== pin;
-  const weak = pin.length === 4 && /^(\d)\1{3}$/.test(pin);
+  const weak = pin.length === 4 && isWeak(pin);
   const ready = pin.length === 4 && confirm === pin && businessName.trim().length >= 2 && !weak;
+
+  /**
+   * Why the button is off.
+   *
+   * A disabled primary action with no stated reason is a dead end — the merchant has no way to
+   * discover what is missing. Deriving the reason from the same conditions that disable it means
+   * a new rule can never silently strand someone.
+   */
+  const blockReason =
+    businessName.trim().length < 2
+      ? 'Enter your trading entity name above.'
+      : pin.length !== 4
+        ? 'Choose a 4-digit PIN.'
+        : weak
+          ? 'Four identical digits is the first thing anyone tries. Tap “start over” and pick something else.'
+          : confirm.length !== 4
+            ? 'Re-enter your PIN to confirm it.'
+            : confirm !== pin
+              ? 'The two PINs do not match.'
+              : null;
 
   return (
     <div className="space-y-5">
@@ -66,7 +88,11 @@ export function PinSetup({
             label="Set 4-digit merchant security PIN"
             value={pin}
             onChange={setPin}
-            onComplete={() => setStage('confirm')}
+            onComplete={(value) => {
+              // Advancing a PIN we are going to reject later strands the merchant on a screen
+              // that cannot explain itself.
+              if (!isWeak(value)) setStage('confirm');
+            }}
             invalid={weak}
             autoFocus
           />
@@ -154,6 +180,10 @@ export function PinSetup({
         {busy ? 'Creating your vault…' : 'Create my vault'}
         {!busy ? <ArrowRight size={14} strokeWidth={1.75} /> : null}
       </button>
+
+      {blockReason && !busy ? (
+        <p className="-mt-2 text-center text-[11px] leading-snug text-ochre">{blockReason}</p>
+      ) : null}
     </div>
   );
 }
