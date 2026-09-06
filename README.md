@@ -153,6 +153,16 @@ deployer at <https://faucet.creditcoin.org> first.
 
 ---
 
+## Two surfaces
+
+| Route | What it is |
+| --- | --- |
+| `/` | The public case. Hero, an interactive value-equation widget, the problem grid against Nigerian commercial insurance, and a live network telemetry strip. |
+| `/app` | The merchant vault. Dual reserve, asset registry, the three-second sweep, and the Attestcoin telemetry console. |
+
+The landing page's telemetry strip and the vault's console both read live cc3-testnet and proof-
+builder state on an interval. Nothing is seeded — an undeployed vault renders zeroes.
+
 ## Architecture
 
 ```
@@ -166,6 +176,7 @@ lib/
   H3SpatialLock.ts         high-accuracy GPS → H3 res-10 cell
   AttestcoinConduit.ts     proof-builder client + ABI packing
 components/
+  landing/                 public landing page: value equation + live telemetry strip
   BentoDashboard.tsx       reserve · incident · inventory · Attestcoin telemetry console
   SpatialSweepModal.tsx    viewfinder, oscilloscope, rejection banners, settlement receipt
   DepositModal.tsx         Attestcoin (Sepolia) · native tCTC · Trugi NGN virtual account
