@@ -10,3 +10,4 @@ artifacts
 next-env.d.ts
 .vercel
 .deployer.json
+.claude
