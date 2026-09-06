@@ -237,6 +237,26 @@ deployer at <https://faucet.creditcoin.org> first.
 
 Both source-chain bindings are write-once and already set, so neither can be repointed.
 
+### Live Attestcoin transactions
+
+The readability path has been exercised end to end on the deployed contracts, in both of its roles:
+
+| What | Transaction |
+| --- | --- |
+| **Live valuation** — a real Chainlink round read off Ethereum through `0x0FD2` and adopted as the vault's rate (round 35835, $2477.29, 279k gas) | [`0x0c91f531…cccf11ad`](https://creditcoin-testnet.blockscout.com/tx/0x0c91f5310e663f04ada4d3546bc5885c22abad2ffeb8f68de77a6aa2cccf11ad) |
+| **Source deposit** — 0.001 ETH funded on Ethereum Sepolia, emitting `ReserveFunded` | [`0x3f72914b…263d3231`](https://sepolia.etherscan.io/tx/0x3f72914bcd708da343bffa9692282f65c978678bb0c2ae1c9a68a6a9263d3231) |
+| **Cross-chain credit** — that Sepolia deposit proven and read into Creditcoin, priced at the proven rate, split 85/15 (305k gas) | [`0x3cf65ef8…181e65e7`](https://creditcoin-testnet.blockscout.com/tx/0x3cf65ef8384bf95708d26088e04948df81c4f9602abee0b1adf84f80181e65e7) |
+
+```
+0.001 ETH on Sepolia
+  -> attestor quorum reaches block 11,648,194   (~44 blocks, ~9 min)
+  -> 0x0FD2 verifies inclusion + continuity
+  -> priced at the proven ETH/USD of $2477.29 against tCTC/USD of $0.90
+  -> credited 2.752542326688888888 tCTC
+     tier 1  2.339660977685555554   (withdrawable)
+     tier 2  0.412881349003333334   (mutual buffer)
+```
+
 ## Two surfaces
 
 | Route | What it is |
