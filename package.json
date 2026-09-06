@@ -11,7 +11,8 @@
     "test": "node tests/vault.test.mjs && node tests/challenge.test.mjs && node tests/oracle.test.mjs && node tests/deploy-preflight.test.mjs && node --experimental-strip-types --import ./tests/ts-resolve.mjs tests/serial.test.mjs && node --experimental-strip-types --import ./tests/ts-resolve.mjs tests/proximity.test.mjs && node --experimental-strip-types --import ./tests/ts-resolve.mjs tests/parallax.test.mjs && node --experimental-strip-types --import ./tests/ts-resolve.mjs tests/attestcoin.test.mjs",
     "vendor:ocr": "node scripts/vendor-ocr.mjs",
     "prebuild": "node scripts/vendor-ocr.mjs",
-    "predev": "node scripts/vendor-ocr.mjs"
+    "predev": "node scripts/vendor-ocr.mjs",
+    "deploy:portal": "node scripts/deploy-portal.mjs"
   },
   "dependencies": {
     "canvas-confetti": "^1.9.4",

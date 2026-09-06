@@ -226,6 +226,17 @@ deployer at <https://faucet.creditcoin.org> first.
 
 ---
 
+## Deployed
+
+| Contract | Chain | Address |
+| --- | --- | --- |
+| `TemiVault` | Creditcoin cc3-testnet (102031) | [`0x83c7841d…d676449`](https://creditcoin-testnet.blockscout.com/address/0x83c7841dc38bb662e1e7d7a47d300b2ddd676449) |
+| `TemiSourcePortal` | Ethereum Sepolia (Attestcoin chain key 1) | [`0x83C7841d…D676449`](https://sepolia.etherscan.io/address/0x83C7841dC38bb662E1E7D7a47d300b2DdD676449) |
+| Block Prover precompile | Creditcoin runtime | [`0x…0FD2`](https://creditcoin-testnet.blockscout.com/address/0x0000000000000000000000000000000000000FD2) |
+| Chainlink ETH/USD aggregator | Ethereum Sepolia | `0x719E22E3D4b690E5d96cCb40619180B5427F14AE` |
+
+Both source-chain bindings are write-once and already set, so neither can be repointed.
+
 ## Two surfaces
 
 | Route | What it is |

@@ -14,3 +14,4 @@ next-env.d.ts
 
 # Vendored Tesseract runtime — regenerate with `npm run vendor:ocr`
 public/tesseract
+.pending-deposit.json
