@@ -137,6 +137,23 @@ is enough to prove someone is standing at their own stall and not enough to trac
 
 ---
 
+## Opening an account
+
+A market trader has no extension and has never seen a seed phrase. The default path does not ask
+them to connect a wallet — it provisions one. They give a business name, touch the fingerprint
+sensor, and a key is generated in the browser and encrypted with a secret derived from a WebAuthn
+passkey via the PRF extension. Gas is sponsored, so they never learn that gas exists.
+
+Where PRF is unsupported the key falls back to IndexedDB behind a passkey *presence* check, and
+the UI says so explicitly rather than implying uniform security.
+
+A second, deliberately quiet path connects an injected EVM wallet so a reviewer can drive the same
+contracts from a funded account. Both produce a viem wallet client and an address, so everything
+downstream is one code path.
+
+Not account abstraction: no smart account, no session keys, no recovery, and sponsorship is a
+rate-limited drip rather than a paymaster. Losing the phone loses the vault.
+
 ## Optimistic settlement
 
 A browser cannot prove where a sensor reading came from, so large draws on *other people's*

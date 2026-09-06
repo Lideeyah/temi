@@ -14,7 +14,7 @@ import {
   Wallet,
 } from 'lucide-react';
 import type { Hex } from 'viem';
-import { useWallet } from '@/hooks/useWallet';
+import { useMerchantAccount } from '@/hooks/useMerchantAccount';
 import { useVault, type VaultAsset } from '@/hooks/useVault';
 import {
   blockscoutAddress,
@@ -45,11 +45,23 @@ import { RegisterAssetModal } from './RegisterAssetModal';
 import { SpatialSweepModal } from './SpatialSweepModal';
 import { LiveValuationCard } from './LiveValuationCard';
 import { PendingClaimsCard } from './PendingClaimsCard';
+import { AccountDrawer, AccountPill } from './AccountDrawer';
 import { Badge, Button, MetricRow, Modal, Notice, StatusDot, TextInput } from './ui/Primitives';
 
 export function BentoDashboard() {
-  const wallet = useWallet();
-  const vault = useVault(wallet.address);
+  const account = useMerchantAccount();
+  const vault = useVault(account.address);
+
+  // A merchant who taps "Report loss" without an account should be taken through provisioning,
+  // not left staring at a disabled button wondering what they did wrong.
+  const [accountDrawer, setAccountDrawer] = useState<string | null>(null);
+  const requireAccount = useCallback(
+    (reason: string, action: () => void) => {
+      if (account.connected) action();
+      else setAccountDrawer(reason);
+    },
+    [account.connected],
+  );
   const [denomination, setDenomination] = useState<Denomination>('tCTC');
 
   const [depositOpen, setDepositOpen] = useState(false);
@@ -73,9 +85,10 @@ export function BentoDashboard() {
   return (
     <div className="min-h-dvh bg-paper">
       <Header
-        wallet={wallet}
+        account={account}
         denomination={denomination}
         onDenominationChange={setDenomination}
+        onOpenAccount={() => setAccountDrawer('Merchant account')}
       />
 
       <main className="mx-auto w-full max-w-[1240px] px-4 pb-16 pt-5 sm:px-6">
@@ -90,11 +103,11 @@ export function BentoDashboard() {
           </div>
         ) : null}
 
-        {wallet.hasProvider && wallet.address && !wallet.onCorrectChain ? (
+        {account.kind === 'injected' && !account.injected.onCorrectChain ? (
           <div className="mb-4">
             <Notice tone="rust" title="Wallet is on the wrong network">
               Tèmi settles on Creditcoin cc3-testnet (chain 102031).{' '}
-              <button onClick={() => void wallet.ensureChain()} className="underline underline-offset-2">
+              <button onClick={() => void account.injected.ensureChain()} className="underline underline-offset-2">
                 Switch network
               </button>
             </Notice>
@@ -114,21 +127,21 @@ export function BentoDashboard() {
             vault={vault}
             money={money}
             denomination={denomination}
-            connected={Boolean(wallet.address)}
-            onDeposit={() => setDepositOpen(true)}
-            onWithdraw={() => setWithdrawOpen(true)}
+            connected={account.connected}
+            onDeposit={() => requireAccount('Fund your reserve', () => setDepositOpen(true))}
+            onWithdraw={() => requireAccount('Withdraw from Tier 1', () => setWithdrawOpen(true))}
           />
 
           <IncidentTile
             assets={activeAssets}
             selectedAssetId={selectedAssetId}
             onSelect={setSelectedAssetId}
-            onSweep={() => selectedAsset && setSweepAsset(selectedAsset)}
-            connected={Boolean(wallet.address)}
+            onSweep={() => requireAccount('Report loss or damage', () => selectedAsset && setSweepAsset(selectedAsset))}
+            connected={account.connected}
             money={money}
             claims={vault.claims}
-            walletClient={wallet.walletClient}
-            account={wallet.address}
+            walletClient={account.walletClient}
+            account={account.address}
             onClaimsChanged={() => void vault.refresh()}
           />
 
@@ -137,47 +150,53 @@ export function BentoDashboard() {
             assets={vault.assets}
             loading={vault.loading}
             money={money}
-            onRegister={() => setRegisterOpen(true)}
-            onReport={(asset) => setSweepAsset(asset)}
-            connected={Boolean(wallet.address)}
+            onRegister={() => requireAccount('Register an asset', () => setRegisterOpen(true))}
+            onReport={(asset) => requireAccount('Report loss or damage', () => setSweepAsset(asset))}
+            connected={account.connected}
           />
 
           <AttestcoinConsole
             vault={vault}
             money={money}
-            walletClient={wallet.walletClient}
-            account={wallet.address}
+            walletClient={account.walletClient}
+            account={account.address}
           />
         </div>
       </main>
 
+      <AccountDrawer
+        open={accountDrawer !== null}
+        onClose={() => setAccountDrawer(null)}
+        account={account}
+        reason={accountDrawer ?? undefined}
+      />
       <DepositModal
         open={depositOpen}
         onClose={() => setDepositOpen(false)}
-        walletClient={wallet.walletClient}
-        account={wallet.address}
+        walletClient={account.walletClient}
+        account={account.address}
         onDeposited={() => void vault.refresh()}
       />
       <WithdrawModal
         open={withdrawOpen}
         onClose={() => setWithdrawOpen(false)}
-        wallet={wallet}
+        account={account}
         available={vault.tier1PersonalBalance}
         onWithdrawn={() => void vault.refresh()}
       />
       <RegisterAssetModal
         open={registerOpen}
         onClose={() => setRegisterOpen(false)}
-        walletClient={wallet.walletClient}
-        account={wallet.address}
+        walletClient={account.walletClient}
+        account={account.address}
         onRegistered={() => void vault.refresh()}
       />
       <SpatialSweepModal
         open={sweepAsset !== null}
         onClose={() => setSweepAsset(null)}
         asset={sweepAsset}
-        walletClient={wallet.walletClient}
-        account={wallet.address}
+        walletClient={account.walletClient}
+        account={account.address}
         onSettled={() => void vault.refresh()}
       />
     </div>
@@ -189,13 +208,15 @@ export function BentoDashboard() {
 /* ------------------------------------------------------------------ */
 
 function Header({
-  wallet,
+  account,
   denomination,
   onDenominationChange,
+  onOpenAccount,
 }: {
-  wallet: ReturnType<typeof useWallet>;
+  account: ReturnType<typeof useMerchantAccount>;
   denomination: Denomination;
   onDenominationChange: (d: Denomination) => void;
+  onOpenAccount: () => void;
 }) {
   return (
     <header className="sticky top-0 z-30 border-b border-hairline bg-paper/92 backdrop-blur-sm">
@@ -237,33 +258,9 @@ function Header({
             ))}
           </div>
 
-          {wallet.address ? (
-            <a
-              href={blockscoutAddress(wallet.address)}
-              target="_blank"
-              rel="noreferrer"
-              className="focus-ring tabular inline-flex items-center gap-1.5 rounded-[3px] border border-hairline-strong px-2.5 py-[5px] text-[11px] text-ink transition-colors hover:bg-[rgba(31,36,47,0.04)]"
-            >
-              <StatusDot tone={wallet.onCorrectChain ? 'moss' : 'rust'} />
-              {truncateAddress(wallet.address)}
-            </a>
-          ) : (
-            <Button
-              onClick={() => void wallet.connect()}
-              disabled={wallet.connecting}
-              className="px-3 py-[6px] text-[12px]"
-            >
-              <Wallet size={13} strokeWidth={1.75} />
-              {wallet.connecting ? 'Connecting…' : 'Connect wallet'}
-            </Button>
-          )}
+          <AccountPill account={account} onOpen={onOpenAccount} />
         </div>
       </div>
-      {wallet.error ? (
-        <div className="mx-auto w-full max-w-[1240px] px-4 pb-2 sm:px-6">
-          <p className="text-[11px] text-rust">{wallet.error}</p>
-        </div>
-      ) : null}
     </header>
   );
 }
@@ -357,14 +354,14 @@ function ReserveTile({
           </div>
 
           <div className="mt-4 flex gap-2">
-            <Button onClick={onDeposit} disabled={!connected} className="flex-1">
+            <Button onClick={onDeposit} className="flex-1">
               <Plus size={13} strokeWidth={2} />
               Deposit reserve
             </Button>
             <Button
               variant="outline"
               onClick={onWithdraw}
-              disabled={!connected || vault.tier1PersonalBalance === 0n}
+              disabled={connected && vault.tier1PersonalBalance === 0n}
             >
               <Minus size={13} strokeWidth={2} />
               Withdraw
@@ -413,8 +410,8 @@ function IncidentTile({
   connected: boolean;
   money: (wei: bigint) => string;
   claims: import('@/hooks/useVault').PendingClaim[];
-  walletClient: ReturnType<typeof useWallet>['walletClient'];
-  account: ReturnType<typeof useWallet>['address'];
+  walletClient: ReturnType<typeof useMerchantAccount>['walletClient'];
+  account: ReturnType<typeof useMerchantAccount>['address'];
   onClaimsChanged: () => void;
 }) {
   const selected = assets.find((a) => a.assetId === selectedAssetId) ?? null;
@@ -435,7 +432,7 @@ function IncidentTile({
           className="focus-ring tabular w-full rounded-[3px] border border-hairline-strong bg-paper-raised px-2.5 py-2 text-[12px] text-ink disabled:opacity-50"
         >
           {assets.length === 0 ? (
-            <option value="">No active assets</option>
+            <option value="">{connected ? 'No active assets' : 'Open your vault first'}</option>
           ) : (
             assets.map((asset) => (
               <option key={asset.assetId} value={asset.assetId}>
@@ -458,7 +455,7 @@ function IncidentTile({
       ) : null}
 
       <div className="mt-auto">
-        <Button variant="alert" block onClick={onSweep} disabled={!connected || !selected}>
+        <Button variant="alert" block onClick={onSweep} disabled={connected && !selected}>
           <ShieldAlert size={14} strokeWidth={1.75} />
           Begin spatial sweep
         </Button>
@@ -504,7 +501,7 @@ function InventoryTile({
       eyebrow={`${assets.length} registered`}
       title="Asset inventory"
       action={
-        <Button variant="outline" onClick={onRegister} disabled={!connected} className="px-2.5 py-[6px] text-[12px]">
+        <Button variant="outline" onClick={onRegister} className="px-2.5 py-[6px] text-[12px]">
           <Plus size={12} strokeWidth={2} />
           Register asset
         </Button>
@@ -577,8 +574,7 @@ function AssetCard({
       {asset.isActive ? (
         <button
           onClick={() => onReport(asset)}
-          disabled={!connected}
-          className="focus-ring mt-2 w-full rounded-[2px] border border-hairline-strong px-2 py-1.5 text-[11px] font-medium text-rust transition-colors hover:bg-[rgba(140,74,74,0.06)] disabled:opacity-40"
+          className="focus-ring mt-2 w-full rounded-[2px] border border-hairline-strong px-2 py-1.5 text-[11px] font-medium text-rust transition-colors hover:bg-[rgba(140,74,74,0.06)]"
         >
           Report loss / damage
         </button>
@@ -599,8 +595,8 @@ function AttestcoinConsole({
 }: {
   vault: ReturnType<typeof useVault>;
   money: (wei: bigint) => string;
-  walletClient: ReturnType<typeof useWallet>['walletClient'];
-  account: ReturnType<typeof useWallet>['address'];
+  walletClient: ReturnType<typeof useMerchantAccount>['walletClient'];
+  account: ReturnType<typeof useMerchantAccount>['address'];
 }) {
   const [attestedHeight, setAttestedHeight] = useState<number | null>(null);
   const [proverUp, setProverUp] = useState<boolean | null>(null);
@@ -698,13 +694,13 @@ function AttestcoinConsole({
 function WithdrawModal({
   open,
   onClose,
-  wallet,
+  account,
   available,
   onWithdrawn,
 }: {
   open: boolean;
   onClose: () => void;
-  wallet: ReturnType<typeof useWallet>;
+  account: ReturnType<typeof useMerchantAccount>;
   available: bigint;
   onWithdrawn: () => void;
 }) {
@@ -717,16 +713,16 @@ function WithdrawModal({
   const valid = wei > 0n && wei <= available;
 
   const withdraw = useCallback(async () => {
-    if (!wallet.walletClient || !wallet.address || !TEMI_VAULT_ADDRESS || !valid) return;
+    if (!account.walletClient || !account.address || !TEMI_VAULT_ADDRESS || !valid) return;
     setPending(true);
     setError(null);
     try {
-      const hash = await wallet.walletClient.writeContract({
+      const hash = await account.walletClient.writeContract({
         address: TEMI_VAULT_ADDRESS,
         abi: temiVaultAbi,
         functionName: 'withdrawTier1',
         args: [wei],
-        account: wallet.address,
+        account: account.address,
         chain: creditcoinTestnet,
       });
       await creditcoinPublicClient.waitForTransactionReceipt({ hash });
@@ -737,7 +733,7 @@ function WithdrawModal({
     } finally {
       setPending(false);
     }
-  }, [wallet, wei, valid, onWithdrawn]);
+  }, [account, wei, valid, onWithdrawn]);
 
   return (
     <Modal open={open} onClose={onClose} eyebrow="Tier 1 · personal vault" title="Withdraw" width="max-w-md">

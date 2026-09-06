@@ -13,6 +13,7 @@ export const metadata: Metadata = {
 
 const CONTENTS = [
   ['1', 'The problem', 'problem'],
+  ['1b', 'Opening an account', 'account'],
   ['2', 'The dual reserve', 'reserve'],
   ['3', 'Solvency invariant', 'invariant'],
   ['3b', 'Optimistic settlement', 'optimistic'],
@@ -113,6 +114,55 @@ export default function WhitepaperPage() {
                 open. Denial is discretionary and opaque. And the insurer&apos;s solvency is
                 unauditable by the policyholder, who discovers whether the cover was real at
                 precisely the moment it matters.
+              </P>
+            </Section>
+
+            {/* ---------------------------------------------------- */}
+            <Section id="account" index="1b" title="Opening an account">
+              <P>
+                A market trader in Balogun does not have a browser extension, has never seen a
+                seed phrase, and is opening Tèmi because their generator just died. If the first
+                thing they meet is a modal asking them to approve a hex string, the product is
+                over before it starts. Wallet onboarding is not a detail to polish later; for
+                this user it is the thing most likely to kill the product outright.
+              </P>
+              <Claim>
+                So the default path does not ask anyone to connect a wallet. It provisions one.
+              </Claim>
+              <P>
+                A merchant gives their business name and touches the fingerprint sensor they
+                already use to unlock the phone. Underneath, a key is generated in the browser and
+                encrypted with a secret derived from a WebAuthn passkey through the PRF extension.
+                The passkey never leaves the secure element, the derived secret is stored nowhere,
+                and the key on disk is useless without the biometric. Gas is sponsored, so the
+                merchant never has to acquire a token to file a claim — they do not need to learn
+                that gas exists.
+              </P>
+              <P>
+                Where PRF is unavailable — and it still is in many browsers — the key falls back
+                to sitting in IndexedDB behind a passkey <em>presence</em> check, which stops a
+                casual snoop and would not stop someone with the device unlocked and developer
+                tools open. The interface reports which of the two is actually in force, after the
+                fact, rather than promising biometric encryption to someone who did not receive
+                it. That distinction matters most to the person least equipped to check it.
+              </P>
+              <P>
+                The second path is a conventional injected EVM wallet, kept deliberately quiet in
+                the header. It exists so a technical reviewer can drive the same contracts from
+                their own funded account. Both paths produce a viem wallet client and an address,
+                so everything downstream — deposits, registration, the sweep, settlement — is a
+                single code path. The merchant who signed in with a fingerprint and the judge who
+                connected MetaMask are indistinguishable to the contract.
+              </P>
+              <H3>What this is not</H3>
+              <P>
+                It is not account abstraction. There is no smart account, no session key, no
+                social recovery, and no paymaster — gas sponsorship is a direct drip from a funded
+                key behind a rate-limited endpoint, which is honest on a testnet where gas costs a
+                fraction of a token and would not survive contact with mainnet. Losing the phone
+                loses the vault. A production build needs ERC-4337 with a session-scoped signer
+                and guardians, and that is a meaningful amount of work rather than a configuration
+                change.
               </P>
             </Section>
 
