@@ -6,17 +6,12 @@ export const temiSourcePortalAbi = [
     "type": "error"
   },
   {
-    "inputs": [],
-    "name": "ZeroBeneficiary",
-    "type": "error"
-  },
-  {
     "anonymous": false,
     "inputs": [
       {
         "indexed": true,
         "internalType": "address",
-        "name": "user",
+        "name": "depositor",
         "type": "address"
       },
       {
@@ -26,31 +21,58 @@ export const temiSourcePortalAbi = [
         "type": "uint256"
       },
       {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "targetAssetId",
-        "type": "uint256"
+        "indexed": true,
+        "internalType": "bytes32",
+        "name": "vaultTarget",
+        "type": "bytes32"
       }
     ],
-    "name": "CrossChainReserveDeposit",
+    "name": "ReserveFunded",
     "type": "event"
   },
   {
     "inputs": [
       {
-        "internalType": "address",
-        "name": "beneficiary",
-        "type": "address"
-      },
-      {
-        "internalType": "uint256",
-        "name": "targetAssetId",
-        "type": "uint256"
+        "internalType": "bytes32",
+        "name": "vaultTarget",
+        "type": "bytes32"
       }
     ],
     "name": "fundReserve",
     "outputs": [],
     "stateMutability": "payable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "operator",
+        "type": "address"
+      }
+    ],
+    "name": "fundReserveFor",
+    "outputs": [],
+    "stateMutability": "payable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "",
+        "type": "bytes32"
+      }
+    ],
+    "name": "fundedForVault",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {
@@ -91,4 +113,4 @@ export const temiSourcePortalAbi = [
   }
 ] as const;
 
-export const temiSourcePortalBytecode = "0x60808060405234601557610204908161001a8239f35b5f80fdfe60806040526004361015610088575b3615610018575f80fd5b341561007957335f525f60205260405f206100343482546101ad565b9055610042346001546101ad565b6001556040513481525f60208201527fbc00dca9cf6d3088211c0f743c5881c4eb8b0ed60a97463caafca0f7c8c4a9cc60403392a2005b631f2a200560e01b5f5260045ffd5b5f3560e01c80632f517f2e146101055780635b7c7423146100ce5763ad044f490361000e57346100ca575f3660031901126100ca576020600154604051908152f35b5f80fd5b346100ca5760203660031901126100ca576001600160a01b036100ef610197565b165f525f602052602060405f2054604051908152f35b60403660031901126100ca57610119610197565b3415610079576001600160a01b0316801561018857805f525f60205260405f206101443482546101ad565b9055610152346001546101ad565b6001557fbc00dca9cf6d3088211c0f743c5881c4eb8b0ed60a97463caafca0f7c8c4a9cc604080513481526024356020820152a2005b63776cceeb60e01b5f5260045ffd5b600435906001600160a01b03821682036100ca57565b919082018092116101ba57565b634e487b7160e01b5f52601160045260245ffdfea26469706673582212203cf05a37d0a6e29f560005a4866dba9c092f99c18f4bf4471a0911b2c96a3fba64736f6c634300081c0033" as const;
+export const temiSourcePortalBytecode = "0x60808060405234601557610257908161001a8239f35b5f80fdfe60806040526004361015610083575b3615610018575f80fd5b341561007457335f525f60205260405f20610034348254610200565b905561004234600254610200565b6002555f6040513481527f2708f71b476b0f4e2f443494db167a27d6a46973d4e387e0b08c7c751b0144f360203392a3005b631f2a200560e01b5f5260045ffd5b5f3560e01c806315a94709146101c75780635b7c74231461018c578063ad044f491461016f578063c3485f81146100ec5763cbe55b250361000e57346100e85760203660031901126100e8576004355f526001602052602060405f2054604051908152f35b5f80fd5b60203660031901126100e857600435341561007457335f525f60205260405f20610117348254610200565b9055805f52600160205260405f20610130348254610200565b905561013e34600254610200565b6002556040513481527f2708f71b476b0f4e2f443494db167a27d6a46973d4e387e0b08c7c751b0144f360203392a3005b346100e8575f3660031901126100e8576020600254604051908152f35b346100e85760203660031901126100e8576004356001600160a01b038116908190036100e8575f525f602052602060405f2054604051908152f35b60203660031901126100e8576004356001600160a01b038116908190036100e857341561007457335f525f60205260405f206101173482545b9190820180921161020d57565b634e487b7160e01b5f52601160045260245ffdfea2646970667358221220e7c6a9a1a6afcc4234deb7e8be299c482aefa10f0644e88187fe01f654a756ab64736f6c634300081c0033" as const;

@@ -1,26 +1,107 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/*
+ * Tèmi — Tactile Paper & Cool Slate.
+ *
+ * The surface should read as a premium physical ledger: warm matte paper, crisp white cards,
+ * hairline rules, and desaturated accents that never shout. Every colour here is a flat pigment.
+ * No gradients, no glows, no glass.
+ */
+@theme {
+  /* Canvas */
+  --color-paper: #f4f1ea;
+  --color-paper-raised: #f9f8f6;
+  --color-card: #ffffff;
+
+  /* Ink & supporting slate */
+  --color-ink: #1f242f;
+  --color-slate-strong: #4f5868;
+  --color-slate-soft: #7a8496;
+
+  /* Desaturated accents */
+  --color-moss: #4a6b5d;
+  --color-ochre: #8c733e;
+  --color-rust: #8c4a4a;
+  --color-steel: #4a627a;
+
+  /* Hairlines — the entire structure of the interface */
+  --color-hairline: rgba(31, 36, 47, 0.12);
+  --color-hairline-strong: rgba(31, 36, 47, 0.22);
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", monospace;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  body {
+    background-color: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+  }
+
+  /* Financial metrics must align down the column like a printed ledger. */
+  .tabular {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1, "zero" 1;
+  }
+
+  ::selection {
+    background-color: rgba(74, 107, 93, 0.22);
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@layer components {
+  /* The editorial label that sits above every metric and section. */
+  .eyebrow {
+    font-size: 10px;
+    line-height: 1.2;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    font-weight: 500;
+    color: var(--color-slate-soft);
+  }
+
+  .card {
+    background-color: var(--color-card);
+    border: 1px solid var(--color-hairline);
+    border-radius: 4px;
+  }
+
+  /* Faint ruled paper, the way a ledger page is pre-printed before anything is written on it. */
+  .ruled {
+    background-image: repeating-linear-gradient(
+      to bottom,
+      transparent,
+      transparent 27px,
+      rgba(31, 36, 47, 0.045) 27px,
+      rgba(31, 36, 47, 0.045) 28px
+    );
+  }
+
+  .focus-ring:focus-visible {
+    outline: 2px solid var(--color-ink);
+    outline-offset: 2px;
+  }
+}
+
+/* The sweep viewfinder should feel like a measuring instrument, not a camera app. */
+@keyframes temi-sweep-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.85; }
+}
+
+.reticle-pulse {
+  animation: temi-sweep-pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reticle-pulse {
+    animation: none;
+  }
 }
