@@ -456,7 +456,7 @@ function NativeTab({
       setTxHash(hash);
       onDeposited();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message.split('\n')[0] : 'Deposit failed');
+      setError(describeTxFailure(cause));
     } finally {
       setPending(false);
     }
@@ -514,6 +514,24 @@ function NativeTab({
 /* ================================================================== */
 
 /**
+ * Turn an EVM failure into something a merchant can act on.
+ *
+ * viem surfaces an out-of-funds condition as `reverted with the following reason:` and then
+ * nothing, which tells the person reading it precisely as much as a blank screen would.
+ */
+function describeTxFailure(cause: unknown): string {
+  const raw = cause instanceof Error ? cause.message : String(cause);
+  if (/insufficient funds|exceeds the balance|InsufficientFunds/i.test(raw)) {
+    return 'Your account does not hold enough tCTC to cover this allocation and its gas.';
+  }
+  if (/User rejected|denied transaction|rejected the request/i.test(raw)) {
+    return 'You cancelled the transaction.';
+  }
+  const firstLine = raw.split('\n').find((line) => line.trim().length > 0)?.trim();
+  return firstLine && firstLine.length > 4 ? firstLine : 'The transaction could not be completed.';
+}
+
+/**
  * The evaluator's escape hatch.
  *
  * A judge has no Nigerian bank account, no MTN wallet and no M-Pesa line, so without this the
@@ -545,11 +563,36 @@ function TrugiTab({
   // The allocation the merchant just sized, or a realistic default ticket.
   const RELAY_AMOUNT = prefillWei && prefillWei > 0n ? prefillWei : parseTctc('0.5');
 
+  const [step, setStep] = useState<string | null>(null);
+
+  /**
+   * Simulate the inbound transfer, then allocate it.
+   *
+   * Two steps on purpose, because that is the actual shape of the thing: a bank credit lands in
+   * the merchant's account, and only then do they allocate it to their vault. Asking the
+   * merchant's own account to fund the deposit would be asking someone with no crypto to pay in
+   * crypto, which is precisely the situation this rail exists to avoid.
+   */
   const fireRelayer = useCallback(async () => {
     if (!walletClient || !account || !TEMI_VAULT_ADDRESS) return;
     setPending(true);
     setError(null);
+    setTxHash(null);
+
     try {
+      setStep(`Receiving ${fiat(RELAY_AMOUNT)} on ${region.railName}…`);
+      const response = await fetch('/api/relayer', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ address: account, amount: RELAY_AMOUNT.toString() }),
+      });
+      const body = (await response.json()) as { error?: string; detail?: string };
+      if (!response.ok) {
+        setError(body.detail ? `${body.error}. ${body.detail}` : (body.error ?? 'Settlement failed'));
+        return;
+      }
+
+      setStep('Allocating into your vault…');
       const hash = await walletClient.writeContract({
         address: TEMI_VAULT_ADDRESS,
         abi: temiVaultAbi,
@@ -562,11 +605,12 @@ function TrugiTab({
       setTxHash(hash);
       onDeposited();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message.split('\n')[0] : 'Relayer execution failed');
+      setError(describeTxFailure(cause));
     } finally {
       setPending(false);
+      setStep(null);
     }
-  }, [walletClient, account, RELAY_AMOUNT, onDeposited]);
+  }, [walletClient, account, RELAY_AMOUNT, region.railName, fiat, onDeposited]);
 
   return (
     <div className="space-y-4">
@@ -614,9 +658,10 @@ function TrugiTab({
 
       <SplitBar />
 
+      {step ? <Notice tone="steel" title={step} icon={<Loader2 size={12} className="animate-spin" />} /> : null}
       {error ? <Notice tone="rust" title={error} /> : null}
       {txHash ? (
-        <Notice tone="moss" title={`Relayer settled ${formatTctc(RELAY_AMOUNT)} tCTC`} icon={<Check size={12} />}>
+        <Notice tone="moss" title={`Settled ${fiat(RELAY_AMOUNT)} into your vault`} icon={<Check size={12} />}>
           <a href={blockscoutTx(txHash)} target="_blank" rel="noreferrer" className="tabular underline underline-offset-2">
             {truncateHash(txHash)}
           </a>

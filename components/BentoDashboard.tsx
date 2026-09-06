@@ -205,6 +205,7 @@ export function BentoDashboard() {
                   phoneE164: profile.phoneE164,
                 })
               }
+              onUseWallet={() => setAccountDrawer('Connect a Web3 wallet')}
               onInitialize={(monthly) => void initializeVault(monthly)}
               rateLine={
                 <LiveRateLine

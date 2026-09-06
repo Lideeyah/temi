@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ArrowRight, Check, Fingerprint, Loader2, TriangleAlert } from 'lucide-react';
 import {
   REGION_LIST,
@@ -30,6 +30,7 @@ export function MerchantProfileStage({
   biometricAvailable,
   error,
   onProvision,
+  onUseWallet,
 }: {
   region: Region;
   onRegionChange: (id: Region['id']) => void;
@@ -37,9 +38,24 @@ export function MerchantProfileStage({
   biometricAvailable: boolean;
   error: { title: string; detail?: string } | null;
   onProvision: (profile: { businessName: string; phoneE164: string }) => void;
+  /** Escape hatch when the passkey prompt never arrives. */
+  onUseWallet: () => void;
 }) {
   const [businessName, setBusinessName] = useState('');
   const [phone, setPhone] = useState('');
+
+  // A passkey prompt that never appears looks identical to one that is merely slow. After a few
+  // seconds of waiting, offer a way out rather than leaving someone watching a spinner until a
+  // 60-second timeout they cannot see.
+  const [waitedTooLong, setWaitedTooLong] = useState(false);
+  useEffect(() => {
+    if (!busy) {
+      setWaitedTooLong(false);
+      return;
+    }
+    const timer = setTimeout(() => setWaitedTooLong(true), 8000);
+    return () => clearTimeout(timer);
+  }, [busy]);
 
   const phoneOk = phone.trim() === '' ? null : isValidNationalNumber(phone, region);
   const ready = businessName.trim().length >= 2 && phoneOk === true;
@@ -165,6 +181,22 @@ export function MerchantProfileStage({
         {busy ? 'Waiting for your fingerprint…' : 'Create my vault'}
         {!busy ? <ArrowRight size={14} strokeWidth={1.75} /> : null}
       </button>
+
+      {waitedTooLong ? (
+        <div className="border border-hairline border-l-2 border-l-ochre bg-[rgba(140,115,62,0.06)] px-3.5 py-3">
+          <p className="text-[11.5px] font-medium text-ochre">No prompt yet?</p>
+          <p className="mt-1 text-[11px] leading-relaxed text-slate-strong">
+            Some desktop browsers cannot show a passkey prompt. If nothing appeared, your device
+            may not support one — you can connect a Web3 wallet instead and use the same vault.
+          </p>
+          <button
+            onClick={onUseWallet}
+            className="focus-ring mt-2 inline-flex items-center gap-1.5 rounded-[2px] border border-hairline-strong px-2.5 py-1.5 text-[11px] font-medium text-ink transition-colors hover:bg-[rgba(31,36,47,0.04)]"
+          >
+            Use a Web3 wallet instead
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

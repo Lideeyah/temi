@@ -28,6 +28,7 @@ export function VaultSetup({
   biometricAvailable,
   accountError,
   onProvision,
+  onUseWallet,
   onInitialize,
   rateLine,
 }: {
@@ -37,6 +38,8 @@ export function VaultSetup({
   accountError: { title: string; detail?: string } | null;
   /** Stage 0 — provision the merchant's account from their declared profile. */
   onProvision: (profile: { businessName: string; phoneE164: string }) => void;
+  /** Escape hatch when a passkey prompt never appears. */
+  onUseWallet: () => void;
   /** Stage 2 — fund the first allocation, in wei of tCTC. */
   onInitialize: (monthlyWei: bigint) => void;
   /** The proven exchange rate, shown against the conversion it governs. */
@@ -97,6 +100,7 @@ export function VaultSetup({
           biometricAvailable={biometricAvailable}
           error={accountError}
           onProvision={onProvision}
+          onUseWallet={onUseWallet}
         />
       ) : (
       <>
