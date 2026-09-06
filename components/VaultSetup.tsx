@@ -2,12 +2,12 @@
 
 import { useMemo, useState } from 'react';
 import { ArrowRight, Cpu, Loader2, Store } from 'lucide-react';
-import { formatUnits, parseUnits } from 'viem';
-import { NGN_PER_TCTC } from '@/lib/config';
-import { formatNaira, parseNaira } from '@/lib/naira';
+import { fiatToWei, formatFiat, formatFiatPlain, parseFiat, type RegionId } from '@/lib/regions';
 import { formatTctc } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { useRegion } from './RegionProvider';
 import { ReserveSizingCard, computeSizing, HORIZONS } from './ReserveSizing';
+import { MerchantProfileStage, StageRail } from './MerchantProfileStage';
 import { Badge, Notice } from './ui/Primitives';
 
 /**
@@ -25,27 +25,43 @@ import { Badge, Notice } from './ui/Primitives';
 export function VaultSetup({
   connected,
   busy,
+  biometricAvailable,
+  accountError,
+  onProvision,
   onInitialize,
-  suggestedLabel,
   rateLine,
 }: {
   connected: boolean;
   busy: boolean;
-  /** Called with the first month's allocation, in wei of tCTC. */
+  biometricAvailable: boolean;
+  accountError: { title: string; detail?: string } | null;
+  /** Stage 0 — provision the merchant's account from their declared profile. */
+  onProvision: (profile: { businessName: string; phoneE164: string }) => void;
+  /** Stage 2 — fund the first allocation, in wei of tCTC. */
   onInitialize: (monthlyWei: bigint) => void;
-  suggestedLabel?: string;
   /** The proven exchange rate, shown against the conversion it governs. */
   rateLine?: React.ReactNode;
 }) {
+  const { region, setRegion } = useRegion();
   const [category, setCategory] = useState<'movable' | 'property'>('movable');
-  const [raw, setRaw] = useState('600,000');
+  const [raw, setRaw] = useState(() => region.defaultAssetValue.toLocaleString('en-US'));
   const [horizon, setHorizon] = useState<number>(HORIZONS.movable[0]);
 
-  const declaredWei = useMemo(() => {
-    const naira = parseNaira(raw);
-    if (naira <= 0) return 0n;
-    return parseUnits((naira / NGN_PER_TCTC).toFixed(18), 18);
-  }, [raw]);
+  // Changing jurisdiction re-anchors the example value: a Ghanaian trader should not open on a
+  // figure that only makes sense in Naira.
+  const changeRegion = (id: RegionId) => {
+    setRegion(id);
+  };
+  const [lastRegionId, setLastRegionId] = useState(region.id);
+  if (region.id !== lastRegionId) {
+    setLastRegionId(region.id);
+    setRaw(region.defaultAssetValue.toLocaleString('en-US'));
+  }
+
+  const declaredWei = useMemo(() => fiatToWei(parseFiat(raw), region), [raw, region]);
+
+  // The account exists once they are connected; sizing is stage 1, funding stage 2.
+  const stage: 0 | 1 | 2 = !connected ? 0 : 1;
 
   const sizing = useMemo(
     () => computeSizing(declaredWei, category, horizon),
@@ -71,6 +87,19 @@ export function VaultSetup({
         </p>
       </div>
 
+      <StageRail stage={stage} />
+
+      {stage === 0 ? (
+        <MerchantProfileStage
+          region={region}
+          onRegionChange={changeRegion}
+          busy={busy}
+          biometricAvailable={biometricAvailable}
+          error={accountError}
+          onProvision={onProvision}
+        />
+      ) : (
+      <>
       <div className="grid gap-5 lg:grid-cols-2">
         <div>
           <p className="eyebrow mb-2">Step 1 · What are you protecting?</p>
@@ -105,17 +134,20 @@ export function VaultSetup({
             <span className="eyebrow mb-1.5 block">Replacement value</span>
             <div className="relative">
               <span className="tabular pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[20px] font-semibold text-slate-soft">
-                ₦
+                {region.currencySymbol}
               </span>
               <input
                 value={raw}
                 onChange={(event) => {
-                  const next = parseNaira(event.target.value);
-                  setRaw(next > 0 ? next.toLocaleString('en-NG') : event.target.value);
+                  const next = parseFiat(event.target.value);
+                  setRaw(next > 0 ? next.toLocaleString('en-US') : event.target.value);
                 }}
                 inputMode="numeric"
-                aria-label="Replacement value in Naira"
-                className="tabular focus-ring w-full rounded-[3px] border border-hairline-strong bg-paper-raised py-2.5 pl-9 pr-3 text-[20px] font-semibold tracking-[-0.02em] text-ink"
+                aria-label={`Replacement value in ${region.currencyCode}`}
+                className={cn(
+                  'tabular focus-ring w-full rounded-[3px] border border-hairline-strong bg-paper-raised py-2.5 pr-3 text-[20px] font-semibold tracking-[-0.02em] text-ink',
+                  region.currencySymbol.length > 1 ? 'pl-14' : 'pl-9',
+                )}
               />
             </div>
             <p className="tabular mt-1.5 text-[10.5px] text-slate-soft">
@@ -137,13 +169,6 @@ export function VaultSetup({
       </div>
 
       <div className="mt-6 border-t border-hairline pt-5">
-        {!connected ? (
-          <Notice tone="neutral" title="You will open a vault first">
-            One tap, using the fingerprint that already unlocks this phone. No seed phrase, no
-            extension, and gas is covered for you.
-          </Notice>
-        ) : null}
-
         <button
           onClick={() => onInitialize(sizing.monthlyWei)}
           disabled={busy || declaredWei <= 0n}
@@ -154,20 +179,18 @@ export function VaultSetup({
           )}
         >
           {busy ? <Loader2 size={15} className="animate-spin" /> : null}
-          {busy
-            ? 'Confirming…'
-            : connected
-              ? `Initialise vault & fund ${formatNaira(Number(formatUnits(sizing.monthlyWei, 18)) * NGN_PER_TCTC)}`
-              : 'Open your vault to continue'}
+          {busy ? 'Confirming…' : `Initialise vault & fund ${formatFiat(sizing.monthlyWei, region)}`}
           {!busy ? <ArrowRight size={14} strokeWidth={1.75} /> : null}
         </button>
 
         <p className="mt-2.5 max-w-[62ch] text-[10.5px] leading-relaxed text-slate-soft">
-          This funds your first month&apos;s allocation. It is a deposit, not a premium — 85% stays
-          withdrawable at any moment, and you can register the asset itself once your vault is
-          open. {suggestedLabel ? <span className="tabular">{suggestedLabel}</span> : null}
+          This funds your first month&apos;s allocation via {region.railName}. It is a deposit, not
+          a premium — 85% stays withdrawable at any moment, and you can register the asset itself
+          once your vault is open.
         </p>
       </div>
+      </>
+      )}
     </section>
   );
 }

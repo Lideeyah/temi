@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { decodeEventLog, type Address, type Hex, type WalletClient } from 'viem';
 import { creditcoinPublicClient, blockscoutTx, creditcoinTestnet } from '@/lib/chains';
-import { TEMI_VAULT_ADDRESS, NGN_PER_TCTC } from '@/lib/config';
+import { TEMI_VAULT_ADDRESS } from '@/lib/config';
 import { temiVaultAbi } from '@/lib/abi';
 import {
   MIN_JITTER_SIGMA,
@@ -46,13 +46,13 @@ import {
 import {
   formatTctc,
   formatTctcExact,
-  formatNgn,
   parseTctc,
   shortAssetId,
   truncateHash,
 } from '@/lib/format';
 import type { VaultAsset } from '@/hooks/useVault';
 import { SensorOscilloscope } from './SensorOscilloscope';
+import { useRegion } from './RegionProvider';
 import { SpatialProximityIndicator } from './SpatialProximityIndicator';
 import { Badge, Button, Field, MetricRow, Modal, Notice, StatusDot, TextInput } from './ui/Primitives';
 
@@ -104,9 +104,6 @@ const SERIAL_CROP_POINTS_MS = [1200, 1500, 1800] as const;
 
 const ZERO_HASH = `0x${'0'.repeat(64)}` as Hex;
 
-/** Masked destination for the simulated off-ramp receipt. */
-const OFFRAMP_ACCOUNT = 'OPay (903****120)';
-
 export function SpatialSweepModal({
   open,
   onClose,
@@ -115,6 +112,7 @@ export function SpatialSweepModal({
   account,
   onSettled,
 }: SpatialSweepModalProps) {
+  const { region, fiat } = useRegion();
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -514,7 +512,7 @@ export function SpatialSweepModal({
             hint="Capped at what you declared for this asset. The contract may still settle less, bounded by the mutual buffer."
             suffix={
               <span className="tabular text-[10px] text-slate-soft">
-                ₦{formatNgn(claimedLoss)}
+                {fiat(claimedLoss)}
               </span>
             }
           >
@@ -813,7 +811,7 @@ export function SpatialSweepModal({
               <div className="flex items-baseline justify-between">
                 <span className="text-[11px] text-slate-soft">Claimed loss</span>
                 <span className="tabular text-[11px] text-slate-strong">
-                  ₦{formatNgn(claimedLoss)}
+                  {fiat(claimedLoss)}
                 </span>
               </div>
               <div className="flex items-baseline justify-between">
@@ -821,19 +819,19 @@ export function SpatialSweepModal({
                   Tier 1 draw · your own funds
                 </span>
                 <span className="tabular text-[11px] text-ink">
-                  ₦{formatNgn(receipt.tier1Part)}
+                  {fiat(receipt.tier1Part)}
                   <span className="ml-1.5 text-[9.5px] text-moss">0% fee</span>
                 </span>
               </div>
               <div className="flex items-baseline justify-between">
                 <span className="text-[11px] text-slate-soft">Tier 2 draw · mutual buffer</span>
-                <span className="tabular text-[11px] text-moss">₦{formatNgn(receipt.tier2Part)}</span>
+                <span className="tabular text-[11px] text-moss">{fiat(receipt.tier2Part)}</span>
               </div>
               <div className="flex items-baseline justify-between">
                 <span className="text-[11px] text-slate-soft">
                   Mutual settlement fee · 1.5% of Tier 2
                 </span>
-                <span className="tabular text-[11px] text-rust">−₦{formatNgn(receipt.fee)}</span>
+                <span className="tabular text-[11px] text-rust">−{fiat(receipt.fee)}</span>
               </div>
             </div>
 
@@ -872,12 +870,13 @@ export function SpatialSweepModal({
               <div className="min-w-0">
                 <p className="eyebrow mb-1 text-ochre">Simulated fiat dispatch</p>
                 <p className="tabular text-[11.5px] font-medium leading-snug text-ink">
-                  Settlement Dispatched: ₦{formatNgn(receipt.payout)} via Trugi NGN Instant Rail →{' '}
-                  {OFFRAMP_ACCOUNT}
+                  Settlement dispatched: {fiat(receipt.payout)} via {region.railName} →{' '}
+                  {region.payoutTarget}
                 </p>
                 <p className="mt-1.5 text-[10.5px] leading-relaxed text-slate-soft">
-                  Off-ramp leg is simulated for the demo at ₦{NGN_PER_TCTC.toLocaleString()}/tCTC.
-                  The settlement above is a real cc3-testnet transaction.
+                  Off-ramp leg is simulated for the demo at {region.ratePerTctc.toLocaleString()}{' '}
+                  {region.currencyCode}/tCTC. The settlement above is a real cc3-testnet
+                  transaction.
                 </p>
               </div>
             </div>

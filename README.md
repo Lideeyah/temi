@@ -304,6 +304,30 @@ The readability path has been exercised end to end on the deployed contracts, in
      tier 2  0.412881349003333334   (mutual buffer)
 ```
 
+## Regional adaptation
+
+`TemiVault` is currency-agnostic — it moves 18-decimal base units and knows nothing about Naira,
+Cedi or Shilling. Every fiat figure is a presentation layer resolved from the merchant's declared
+jurisdiction, which is what lets one deployed contract serve four markets without a redeploy. No
+conversion rate ever reaches the chain.
+
+| Jurisdiction | Dialing | Currency | Rate per tCTC | Settlement rail |
+| --- | --- | --- | --- | --- |
+| Nigeria *(pilot)* | +234 | ₦ NGN | 1,450 | Trugi NIP Instant Transfer |
+| Ghana | +233 | GH₵ GHS | 14.8 | MTN MoMo |
+| Kenya | +254 | KSh KES | 128 | M-Pesa Express |
+| Global | +1 / injected | $ USD1 | 1.0 | Attestcoin cross-chain |
+
+The rails differ because the payment infrastructure genuinely differs — Nigeria runs on instant
+bank transfer, Ghana and Kenya on mobile money. Selecting a jurisdiction propagates to the currency
+toggle, every balance, the sizing card, the funding modal and the settlement receipt. Jurisdictions
+we have not operated in say so on the selector rather than implying a live pilot.
+
+Onboarding is three stages: **identity** (jurisdiction, trading entity, mobile number in E.164,
+then passkey provisioning), **reserve sizing**, then **funding** on the region's own rail. Each
+local rail carries a simulate control, because a judge has no Nigerian bank account, no MTN wallet
+and no M-Pesa line — without it the local rail is a dead end for exactly the people assessing it.
+
 ## The zero state
 
 A merchant with no vault has nothing to look at — every balance is zero and every tile is a row

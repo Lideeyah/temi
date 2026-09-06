@@ -63,12 +63,12 @@ export function useMerchantAccount() {
   }, []);
 
   const openMerchantVault = useCallback(
-    async (label: string) => {
+    async (label: string, profile?: { regionId?: string; phoneE164?: string }) => {
       setBusy(true);
       setError(null);
       try {
         const existing = record ?? (await loadMerchantRecord());
-        const active = existing ?? (await createMerchantAccount(label.trim() || 'My business'));
+        const active = existing ?? (await createMerchantAccount(label.trim() || 'My business', profile));
         setRecord(active);
 
         const key = await unlockMerchantAccount(active);

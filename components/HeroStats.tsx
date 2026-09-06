@@ -1,7 +1,6 @@
 'use client';
 
 import type { VaultState } from '@/hooks/useVault';
-import type { Denomination } from '@/lib/format';
 
 /**
  * The three figures worth stating outright, on one hairline-divided row.
@@ -12,11 +11,9 @@ import type { Denomination } from '@/lib/format';
 export function HeroStats({
   vault,
   money,
-  denomination,
 }: {
   vault: VaultState;
   money: (wei: bigint) => string;
-  denomination: Denomination;
 }) {
   const totalActive =
     (vault.telemetry?.tier1Total ?? 0n) + (vault.telemetry?.tier2Pool ?? 0n);
@@ -41,7 +38,6 @@ export function HeroStats({
           </p>
         </div>
       ))}
-      <span className="sr-only">Denominated in {denomination}</span>
     </div>
   );
 }

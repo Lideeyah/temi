@@ -31,16 +31,19 @@ import {
   waitUntilAttested,
   type AttestcoinProof,
 } from '@/lib/AttestcoinConduit';
-import { formatTctc, formatTctcExact, formatNgn, parseTctc, truncateHash } from '@/lib/format';
+import { formatTctc, formatTctcExact, parseTctc, truncateHash } from '@/lib/format';
 import { Badge, Button, Field, MetricRow, Modal, Notice, Tabs, TextInput } from './ui/Primitives';
+import { useRegion } from './RegionProvider';
 
 type TabId = 'attestcoin' | 'native' | 'trugi';
 
-const TABS = [
-  { id: 'attestcoin', label: 'Attestcoin', hint: 'Ethereum Sepolia' },
-  { id: 'native', label: 'Native tCTC', hint: 'Creditcoin' },
-  { id: 'trugi', label: 'Trugi NGN', hint: 'Virtual account' },
-];
+/** The local rail is named for the jurisdiction, because the infrastructure genuinely differs. */
+const RAIL_TAB: Record<string, { label: string; hint: string }> = {
+  'trugi-nip': { label: 'Trugi NGN', hint: 'Virtual account' },
+  'mtn-momo': { label: 'MTN MoMo', hint: 'Mobile money' },
+  'mpesa-stk': { label: 'M-Pesa', hint: 'STK push' },
+  attestcoin: { label: 'Cross-chain', hint: 'Ethereum Sepolia' },
+};
 
 export interface DepositModalProps {
   open: boolean;
@@ -60,8 +63,23 @@ export function DepositModal({
   onDeposited,
   prefillWei,
 }: DepositModalProps) {
-  // A merchant who has just sized their reserve wants the local rail, not a cross-chain proof.
-  const [tab, setTab] = useState<TabId>(prefillWei && prefillWei > 0n ? 'trugi' : 'attestcoin');
+  const { region } = useRegion();
+
+  // A merchant funding a sized allocation wants their own rail, not a cross-chain proof. For a
+  // Global merchant that rail *is* the cross-chain one, which is why this reads from the region.
+  const [tab, setTab] = useState<TabId>(
+    prefillWei && prefillWei > 0n && region.rail !== 'attestcoin' ? 'trugi' : 'attestcoin',
+  );
+
+  const TABS = [
+    { id: 'attestcoin', label: 'Attestcoin', hint: 'Ethereum Sepolia' },
+    { id: 'native', label: 'Native tCTC', hint: 'Creditcoin' },
+    {
+      id: 'trugi',
+      label: RAIL_TAB[region.rail]?.label ?? 'Local rail',
+      hint: RAIL_TAB[region.rail]?.hint ?? '',
+    },
+  ];
 
   return (
     <Modal open={open} onClose={onClose} eyebrow="Fund reserve" title="Deposit" width="max-w-lg">
@@ -495,6 +513,19 @@ function NativeTab({
 /*             TAB 3 — TRUGI NGN VIRTUAL ACCOUNT (DEMO)               */
 /* ================================================================== */
 
+/**
+ * The evaluator's escape hatch.
+ *
+ * A judge has no Nigerian bank account, no MTN wallet and no M-Pesa line, so without this the
+ * local rail is a dead end for exactly the people assessing it. The button fires the same
+ * relayer transaction the real webhook would.
+ */
+const SIMULATE_LABEL: Record<string, string> = {
+  'trugi-nip': 'Simulate inbound NIP transfer',
+  'mtn-momo': 'Simulate MoMo confirmation',
+  'mpesa-stk': 'Simulate M-Pesa STK confirmation',
+};
+
 function TrugiTab({
   walletClient,
   account,
@@ -506,11 +537,12 @@ function TrugiTab({
   onDeposited: () => void;
   prefillWei?: bigint;
 }) {
+  const { region, fiat } = useRegion();
   const [pending, setPending] = useState(false);
   const [txHash, setTxHash] = useState<Hex | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // The allocation the merchant just sized, or a realistic default ticket for a Lagos trader.
+  // The allocation the merchant just sized, or a realistic default ticket.
   const RELAY_AMOUNT = prefillWei && prefillWei > 0n ? prefillWei : parseTctc('0.5');
 
   const fireRelayer = useCallback(async () => {
@@ -540,24 +572,43 @@ function TrugiTab({
     <div className="space-y-4">
       <Badge tone="ochre">
         <Building2 size={9} strokeWidth={2} />
-        Trugi NGN Exchange · virtual account
+        {region.railName}
       </Badge>
 
       <p className="text-[11.5px] leading-relaxed text-slate-soft">
-        NGN → Trugi settlement → PenguinSwap USD1 → TemiVault
+        {region.currencyCode} → {region.railName.split(' ')[0]} settlement → PenguinSwap USD1 →
+        TemiVault
       </p>
 
       <div className="border border-hairline bg-card px-3.5 py-3">
-        <p className="eyebrow mb-2.5">Your dedicated virtual account</p>
-        <CopyRow label="Bank" value="Providus Bank" mono={false} />
-        <CopyRow label="Account" value="9902148821" />
-        <CopyRow label="Name" value="Tèmi / Lagos Traders" mono={false} />
+        {region.rail === 'trugi-nip' ? (
+          <>
+            <p className="eyebrow mb-2.5">Your dedicated virtual account</p>
+            <CopyRow label="Bank" value="Providus Bank" mono={false} />
+            <CopyRow label="Account" value="9902148821" />
+            <CopyRow label="Name" value="Tèmi / Lagos Traders" mono={false} />
+          </>
+        ) : region.rail === 'mtn-momo' ? (
+          <>
+            <p className="eyebrow mb-2.5">Approve the MoMo prompt on your phone</p>
+            <CopyRow label="Merchant ID" value="Tèmi Ghana" mono={false} />
+            <CopyRow label="Short code" value="*170#" />
+            <CopyRow label="Reference" value="TEMI-VAULT" />
+          </>
+        ) : (
+          <>
+            <p className="eyebrow mb-2.5">M-Pesa Express · STK push</p>
+            <CopyRow label="Paybill" value="4102938" />
+            <CopyRow label="Account" value="TEMI-VAULT" />
+            <CopyRow label="Merchant" value="Tèmi Kenya" mono={false} />
+          </>
+        )}
       </div>
 
       <p className="text-[12.5px] leading-relaxed text-slate-strong">
-        An incoming NIBSS instant transfer to this account is settled by Trugi, swapped into
-        USD1 through PenguinSwap and routed to the vault — the merchant never touches a wallet.
-        For the demo, fire that relayer execution yourself: it dispatches a real{' '}
+        An incoming transfer on {region.railName} is settled, swapped into USD1 through
+        PenguinSwap and routed to the vault — the merchant never touches a wallet. For the demo,
+        fire that relayer execution yourself: it dispatches a real{' '}
         <span className="tabular">depositReserve()</span> transaction to cc3-testnet.
       </p>
 
@@ -574,7 +625,7 @@ function TrugiTab({
 
       <Button block variant="outline" onClick={() => void fireRelayer()} disabled={pending || !walletClient}>
         {pending ? <Loader2 size={14} className="animate-spin" /> : null}
-        {pending ? 'Relaying…' : 'Simulate instant bank webhook'}
+        {pending ? 'Relaying…' : SIMULATE_LABEL[region.rail] ?? 'Simulate inbound transfer'}
       </Button>
     </div>
   );

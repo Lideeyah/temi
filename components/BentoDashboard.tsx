@@ -31,13 +31,11 @@ import { temiVaultAbi } from '@/lib/abi';
 import { getAttestedHeight } from '@/lib/AttestcoinConduit';
 import { cellIndexToH3 } from '@/lib/H3SpatialLock';
 import {
-  formatAmount,
   formatTctc,
   parseTctc,
   formatTctcExact,
   shortAssetId,
   truncateAddress,
-  type Denomination,
 } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
@@ -48,6 +46,7 @@ import { SpatialSweepModal } from './SpatialSweepModal';
 import { LiveRateLine } from './LiveRate';
 import { NetworkPill, StatusBar } from './NetworkStatus';
 import { HeroStats } from './HeroStats';
+import { useRegion } from './RegionProvider';
 import { PendingClaimsCard } from './PendingClaimsCard';
 import { AccountDrawer, AccountPill } from './AccountDrawer';
 import { VaultSetup, UninitializedBadge } from './VaultSetup';
@@ -56,6 +55,7 @@ import { Badge, Button, MetricRow, Modal, Notice, StatusDot, TextInput } from '.
 export function BentoDashboard() {
   const account = useMerchantAccount();
   const vault = useVault(account.address);
+  const { region, denomination, setDenomination, money } = useRegion();
 
   // A merchant who taps "Report loss" without an account should be taken through provisioning,
   // not left staring at a disabled button wondering what they did wrong.
@@ -67,7 +67,6 @@ export function BentoDashboard() {
     },
     [account.connected],
   );
-  const [denomination, setDenomination] = useState<Denomination>('tCTC');
 
   const [depositOpen, setDepositOpen] = useState(false);
   const [withdrawOpen, setWithdrawOpen] = useState(false);
@@ -144,7 +143,6 @@ export function BentoDashboard() {
     await creditcoinPublicClient.waitForTransactionReceipt({ hash });
     void vault.refresh();
   }, [account.walletClient, account.address, vault]);
-  const money = useCallback((wei: bigint) => formatAmount(wei, denomination), [denomination]);
 
   return (
     <div className="flex min-h-dvh flex-col bg-paper">
@@ -188,7 +186,7 @@ export function BentoDashboard() {
 
         {isVaultConfigured && vault.initialized ? (
           <div className="mx-auto w-full max-w-4xl">
-            <HeroStats vault={vault} money={money} denomination={denomination} />
+            <HeroStats vault={vault} money={money} />
           </div>
         ) : null}
 
@@ -199,6 +197,14 @@ export function BentoDashboard() {
             <VaultSetup
               connected={account.connected}
               busy={initialising || account.busy}
+              biometricAvailable={account.biometricAvailable}
+              accountError={account.error}
+              onProvision={(profile) =>
+                void account.openMerchantVault(profile.businessName, {
+                  regionId: region.id,
+                  phoneE164: profile.phoneE164,
+                })
+              }
               onInitialize={(monthly) => void initializeVault(monthly)}
               rateLine={
                 <LiveRateLine
@@ -215,7 +221,6 @@ export function BentoDashboard() {
           <ReserveTile
             vault={vault}
             money={money}
-            denomination={denomination}
             connected={account.connected}
             onDeposit={() => requireAccount('Fund your reserve', () => setDepositOpen(true))}
             onWithdraw={() => requireAccount('Withdraw from Tier 1', () => setWithdrawOpen(true))}
@@ -307,12 +312,13 @@ function Header({
   blockNumber,
 }: {
   account: ReturnType<typeof useMerchantAccount>;
-  denomination: Denomination;
-  onDenominationChange: (d: Denomination) => void;
+  denomination: ReturnType<typeof useRegion>['denomination'];
+  onDenominationChange: (d: ReturnType<typeof useRegion>['denomination']) => void;
   onOpenAccount: () => void;
   initialized: boolean;
   blockNumber: bigint | null;
 }) {
+  const { region } = useRegion();
   return (
     <header className="sticky top-0 z-30 border-b border-hairline bg-paper/92 backdrop-blur-sm">
       <div className="mx-auto flex w-full max-w-[1240px] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 sm:px-6">
@@ -331,7 +337,7 @@ function Header({
         <div className="ml-auto flex items-center gap-2">
           {/* NGN / tCTC toggle — a segmented control, not a dropdown. */}
           <div className="flex overflow-hidden rounded-[3px] border border-hairline-strong">
-            {(['NGN', 'tCTC'] as const).map((option) => (
+            {(['fiat', 'tCTC'] as const).map((option) => (
               <button
                 key={option}
                 onClick={() => onDenominationChange(option)}
@@ -342,7 +348,7 @@ function Header({
                     : 'bg-transparent text-slate-strong hover:bg-[rgba(31,36,47,0.05)]',
                 )}
               >
-                {option}
+                {option === 'fiat' ? region.currencyCode : 'tCTC'}
               </button>
             ))}
           </div>
@@ -388,7 +394,6 @@ function Tile({
 function ReserveTile({
   vault,
   money,
-  denomination,
   connected,
   onDeposit,
   onWithdraw,
@@ -397,13 +402,13 @@ function ReserveTile({
 }: {
   vault: ReturnType<typeof useVault>;
   money: (wei: bigint) => string;
-  denomination: Denomination;
   connected: boolean;
   onDeposit: () => void;
   onWithdraw: () => void;
   onCompound: () => void;
   className?: string;
 }) {
+  const { region, denomination } = useRegion();
   const tier2Pool = vault.telemetry?.tier2Pool ?? 0n;
   const total = vault.tier1PersonalBalance + vault.tier2Headroom;
 
@@ -423,13 +428,12 @@ function ReserveTile({
         <div>
           <p className="eyebrow mb-1.5">Tier 1 · personal vault</p>
           <p className="tabular mb-0.5 text-[34px] font-semibold leading-none tracking-[-0.035em] text-ink">
-            {denomination === 'NGN' ? '₦' : ''}
-            {denomination === 'NGN'
-              ? money(vault.tier1PersonalBalance).replace('₦', '')
-              : formatTctc(vault.tier1PersonalBalance)}
+            {money(vault.tier1PersonalBalance)}
           </p>
           <p className="text-[11px] text-slate-soft">
-            {denomination === 'NGN' ? 'Nigerian Naira · display rate' : 'tCTC on cc3-testnet'}
+            {denomination === 'fiat'
+              ? `${region.currencyCode} · display rate`
+              : 'tCTC on cc3-testnet'}
           </p>
 
           {/* The 85/15 architecture, drawn as one segmented rule. */}

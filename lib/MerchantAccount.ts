@@ -43,6 +43,10 @@ export interface MerchantRecord {
   iv: string;
   protection: AccountProtection;
   label: string;
+  /** Jurisdiction the merchant declared. Drives currency and settlement rail. */
+  regionId?: string;
+  /** E.164. Where a fiat payout eventually lands. */
+  phoneE164?: string;
   createdAt: number;
 }
 
@@ -193,7 +197,10 @@ type PrfExtensionResults = {
  * @param label What the merchant calls their business. Shown in the OS passkey prompt, so it
  *              should read as something they recognise rather than a hex string.
  */
-export async function createMerchantAccount(label: string): Promise<MerchantRecord> {
+export async function createMerchantAccount(
+  label: string,
+  profile?: { regionId?: string; phoneE164?: string },
+): Promise<MerchantRecord> {
   if (!isPasskeySupported()) {
     throw new MerchantError(
       'ERR_PASSKEY_UNSUPPORTED',
@@ -271,6 +278,8 @@ export async function createMerchantAccount(label: string): Promise<MerchantReco
     iv: toB64(iv),
     protection,
     label,
+    regionId: profile?.regionId,
+    phoneE164: profile?.phoneE164,
     createdAt: Date.now(),
   };
   await put(record);

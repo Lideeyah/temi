@@ -1,11 +1,10 @@
 'use client';
 
 import { useMemo } from 'react';
-import { formatUnits } from 'viem';
-import { NGN_PER_TCTC } from '@/lib/config';
-import { formatNaira } from '@/lib/naira';
+import { formatFiat } from '@/lib/regions';
 import { formatTctc } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { useRegion } from './RegionProvider';
 
 /**
  * Reserve sizing — what replaces underwriting.
@@ -61,8 +60,6 @@ export function computeSizing(
   };
 }
 
-const naira = (wei: bigint) => formatNaira(Number(formatUnits(wei, 18)) * NGN_PER_TCTC);
-
 export function ReserveSizingCard({
   declaredWei,
   category,
@@ -77,6 +74,9 @@ export function ReserveSizingCard({
   /** The proven exchange rate, rendered where the conversion is shown. */
   rateLine?: React.ReactNode;
 }) {
+  const { region } = useRegion();
+  const money = (wei: bigint) => formatFiat(wei, region);
+
   const sizing = useMemo(
     () => computeSizing(declaredWei, category, horizonMonths),
     [declaredWei, category, horizonMonths],
@@ -90,7 +90,7 @@ export function ReserveSizingCard({
         <p className="eyebrow mb-1">Suggested reserve target</p>
         <div className="flex items-baseline justify-between gap-3">
           <span className="tabular text-[22px] font-semibold leading-none tracking-[-0.03em] text-ink">
-            {naira(sizing.targetWei)}
+            {money(sizing.targetWei)}
           </span>
           <span className="tabular text-[10.5px] text-slate-soft">
             {TARGET_BPS[category] / 100}% of value · {formatTctc(sizing.targetWei, 2)} tCTC
@@ -126,7 +126,7 @@ export function ReserveSizingCard({
         <div className="mb-2 flex items-baseline justify-between">
           <span className="text-[11px] text-slate-soft">Monthly contribution</span>
           <span className="tabular text-[14px] font-semibold text-ink">
-            {naira(sizing.monthlyWei)}
+            {money(sizing.monthlyWei)}
             <span className="ml-1 text-[10px] font-normal text-slate-soft">/mo</span>
           </span>
         </div>
@@ -139,18 +139,18 @@ export function ReserveSizingCard({
         <div className="mt-1.5 space-y-0.5">
           <div className="flex items-baseline justify-between">
             <span className="text-[10.5px] text-slate-strong">85% · stays yours</span>
-            <span className="tabular text-[10.5px] text-ink">{naira(sizing.monthlyTier1Wei)}</span>
+            <span className="tabular text-[10.5px] text-ink">{money(sizing.monthlyTier1Wei)}</span>
           </div>
           <div className="flex items-baseline justify-between">
             <span className="text-[10.5px] text-moss">15% · mutual buffer</span>
-            <span className="tabular text-[10.5px] text-moss">{naira(sizing.monthlyTier2Wei)}</span>
+            <span className="tabular text-[10.5px] text-moss">{money(sizing.monthlyTier2Wei)}</span>
           </div>
         </div>
 
         <p className="mt-2.5 border-t border-hairline pt-2 text-[10px] leading-relaxed text-slate-soft">
           Roughly {sizing.monthlyRatePercent.toFixed(1)}% of the asset&apos;s value each month.
-          Nothing here is a premium — every Naira stays on your balance sheet, and the mutual
-          share is what unlocks the 3× emergency ceiling.
+          Nothing here is a premium — every {region.currencyCode} stays on your balance sheet, and
+          the mutual share is what unlocks the 3× emergency ceiling.
         </p>
       </div>
     </div>
