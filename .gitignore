@@ -9,3 +9,4 @@ artifacts
 *.tsbuildinfo
 next-env.d.ts
 .vercel
+.deployer.json

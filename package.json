@@ -8,7 +8,7 @@
     "start": "next start",
     "compile": "node scripts/compile.mjs && node scripts/gen-abi.mjs",
     "deploy": "node scripts/deploy.mjs",
-    "test": "node --experimental-strip-types tests/parallax.test.mjs"
+    "test": "node --experimental-strip-types --import ./tests/ts-resolve.mjs tests/parallax.test.mjs && node --experimental-strip-types --import ./tests/ts-resolve.mjs tests/attestcoin.test.mjs"
   },
   "dependencies": {
     "canvas-confetti": "^1.9.4",

@@ -55,8 +55,16 @@ export function useVault(address: Address | null, pollMs = 12_000) {
   const [state, setState] = useState<VaultState>(EMPTY);
 
   const refresh = useCallback(async () => {
+    // Even with no deployment configured, keep the telemetry console honest by showing the
+    // live cc3-testnet head rather than a dash.
     if (!TEMI_VAULT_ADDRESS) {
-      setState((s) => ({ ...s, loading: false, error: 'NEXT_PUBLIC_TEMI_VAULT_ADDRESS is not set' }));
+      const blockNumber = await creditcoinPublicClient.getBlockNumber().catch(() => null);
+      setState((s) => ({
+        ...s,
+        blockNumber,
+        loading: false,
+        error: 'NEXT_PUBLIC_TEMI_VAULT_ADDRESS is not set',
+      }));
       return;
     }
 
