@@ -320,6 +320,14 @@ that proves the protocol is real, and it does not depend on the visitor having a
 The dashboard flips to the live ledger once `lifetimeDeposits > 0 || assets.length > 0` — the
 honest on-chain signal that a merchant has actually started.
 
+There is no telemetry sidebar. Every protocol figure lives where it is relevant rather than in a
+column competing with the product: the precompile address and attested Sepolia height sit behind
+the network badge in the header, cross-chain proof count and read cost appear in the Attestcoin
+deposit tab when cross-chain money is actually moving, the tremor and parallax thresholds are read
+out live on the sweep viewfinder beside the reticle, the settlement fee is itemised on the receipt,
+and the proven ETH/USD rate sits on the line that converts Naira into tCTC. One hairline footer
+carries the chain, the precompile and the spatial resolution permanently.
+
 ## Two surfaces
 
 | Route | What it is |

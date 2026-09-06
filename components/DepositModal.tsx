@@ -107,6 +107,17 @@ function AttestcoinTab({
   account: Address | null;
   onDeposited: () => void;
 }) {
+  // Proof count belongs here, next to the act of moving cross-chain money — not on a dashboard
+  // a merchant reads while doing something else entirely.
+  const [crossChainCount, setCrossChainCount] = useState<bigint | null>(null);
+  useEffect(() => {
+    if (!TEMI_VAULT_ADDRESS) return;
+    void creditcoinPublicClient
+      .readContract({ address: TEMI_VAULT_ADDRESS, abi: temiVaultAbi, functionName: 'protocolTelemetry' })
+      .then((raw) => setCrossChainCount((raw as readonly bigint[])[4]))
+      .catch(() => undefined);
+  }, []);
+
   const [sepTxHash, setSepTxHash] = useState('');
   const [stage, setStage] = useState<ConduitStage>('idle');
   const [status, setStatus] = useState<string | null>(null);
@@ -270,7 +281,12 @@ function AttestcoinTab({
           <Link2 size={9} strokeWidth={2} />
           Chain key {chainKey} · Ethereum Sepolia
         </Badge>
-        <Badge tone="moss">Readability · 0 ATC</Badge>
+        <Badge tone="moss">Verified via 0x0FD2 · 0 ATC</Badge>
+        {crossChainCount !== null ? (
+          <Badge tone="steel">
+            {crossChainCount.toString()} cross-chain inflow{crossChainCount === 1n ? '' : 's'} verified
+          </Badge>
+        ) : null}
       </div>
 
       <p className="text-[12.5px] leading-relaxed text-slate-strong">

@@ -68,11 +68,14 @@ export function ReserveSizingCard({
   category,
   horizonMonths,
   onHorizonChange,
+  rateLine,
 }: {
   declaredWei: bigint;
   category: 'movable' | 'property';
   horizonMonths: number;
   onHorizonChange: (months: number) => void;
+  /** The proven exchange rate, rendered where the conversion is shown. */
+  rateLine?: React.ReactNode;
 }) {
   const sizing = useMemo(
     () => computeSizing(declaredWei, category, horizonMonths),
@@ -93,6 +96,7 @@ export function ReserveSizingCard({
             {TARGET_BPS[category] / 100}% of value · {formatTctc(sizing.targetWei, 2)} tCTC
           </span>
         </div>
+        {rateLine ? <div className="mt-1.5">{rateLine}</div> : null}
         <p className="mt-1.5 text-[10.5px] leading-snug text-slate-soft">
           {category === 'movable'
             ? 'Machinery tends to fail outright and be replaced whole, so it is sized higher.'

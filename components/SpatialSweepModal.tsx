@@ -674,6 +674,36 @@ export function SpatialSweepModal({
                 </>
               ) : null}
             </svg>
+            {/* The invariants, read out where they are actually being measured. A merchant sees
+                their own hand registering; a reviewer sees the thresholds live. */}
+            <div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between px-2.5 py-2">
+              <Readout
+                label="σ tremor"
+                value={liveSigma.toFixed(4)}
+                floor={`≥ ${MIN_JITTER_SIGMA}`}
+                ok={samples.length > 20 ? liveSigma >= MIN_JITTER_SIGMA : null}
+              />
+              <Readout
+                label="parallax"
+                value={telemetry ? `${telemetry.parallaxScore}` : '—'}
+                floor={`≥ ${MIN_PARALLAX_SCORE}`}
+                ok={telemetry ? telemetry.parallaxScore >= MIN_PARALLAX_SCORE : null}
+                align="right"
+              />
+            </div>
+
+            {isProperty ? (
+              <div className="pointer-events-none absolute inset-x-0 bottom-8 px-2.5">
+                <span
+                  className={`tabular rounded-[2px] px-1.5 py-[2px] text-[9px] uppercase tracking-[0.08em] ${
+                    insideCell ? 'bg-[rgba(74,107,93,0.85)] text-white' : 'bg-[rgba(140,115,62,0.85)] text-white'
+                  }`}
+                >
+                  H3 res 10 · {insideCell ? 'cell locked' : 'outside cell'}
+                </span>
+              </div>
+            ) : null}
+
             <div className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-[rgba(31,36,47,0.72)] px-3 py-1.5">
               <span className="tabular text-[10px] uppercase tracking-[0.1em] text-white/85">
                 {phase === 'sweeping'
@@ -887,6 +917,33 @@ async function waitForElement(
     await new Promise((resolve) => requestAnimationFrame(resolve));
   }
   return ref.current;
+}
+
+/** A single live threshold readout, overlaid on the viewfinder. */
+function Readout({
+  label,
+  value,
+  floor,
+  ok,
+  align = 'left',
+}: {
+  label: string;
+  value: string;
+  floor: string;
+  ok: boolean | null;
+  align?: 'left' | 'right';
+}) {
+  const colour = ok === null ? 'text-white/70' : ok ? 'text-[#9ED3BC]' : 'text-[#E2A6A6]';
+  return (
+    <div className={align === 'right' ? 'text-right' : ''}>
+      <span className="tabular block text-[8.5px] uppercase tracking-[0.1em] text-white/55">
+        {label} {floor}
+      </span>
+      <span className={`tabular block text-[13px] font-semibold leading-tight ${colour}`}>
+        {value}
+      </span>
+    </div>
+  );
 }
 
 /** Per-transition parallax detail — shown on rejection so the operator can see what failed. */

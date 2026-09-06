@@ -27,12 +27,15 @@ export function VaultSetup({
   busy,
   onInitialize,
   suggestedLabel,
+  rateLine,
 }: {
   connected: boolean;
   busy: boolean;
   /** Called with the first month's allocation, in wei of tCTC. */
   onInitialize: (monthlyWei: bigint) => void;
   suggestedLabel?: string;
+  /** The proven exchange rate, shown against the conversion it governs. */
+  rateLine?: React.ReactNode;
 }) {
   const [category, setCategory] = useState<'movable' | 'property'>('movable');
   const [raw, setRaw] = useState('600,000');
@@ -116,8 +119,9 @@ export function VaultSetup({
               />
             </div>
             <p className="tabular mt-1.5 text-[10.5px] text-slate-soft">
-              ≈ {formatTctc(declaredWei, 2)} tCTC at ₦{NGN_PER_TCTC.toLocaleString()}/tCTC
+              ≈ {formatTctc(declaredWei, 2)} tCTC
             </p>
+            {rateLine ? <div className="mt-1">{rateLine}</div> : null}
           </label>
         </div>
 

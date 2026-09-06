@@ -121,13 +121,28 @@ export function useVault(address: Address | null, pollMs = 12_000) {
       // costs a round trip per field on every poll, so the whole per-operator half is skipped
       // and only chain-level state is fetched.
       if (!address) {
-        const [telemetryOnly, blockOnly] = await Promise.all([
+        // The oracle is chain-level, not per-operator: a visitor with no account should still
+        // see the rate the vault has proven, because it governs the conversion in front of them.
+        const [telemetryOnly, blockOnly, priceOnly, ctcOnly, freshOnly] = await Promise.all([
           creditcoinPublicClient.readContract({ ...contract, functionName: 'protocolTelemetry' }),
           creditcoinPublicClient.getBlockNumber(),
+          creditcoinPublicClient.readContract({ ...contract, functionName: 'sourceAssetUsd' }),
+          creditcoinPublicClient.readContract({ ...contract, functionName: 'ctcUsdWad' }),
+          creditcoinPublicClient.readContract({ ...contract, functionName: 'isPriceFresh' }),
         ]);
         const only = telemetryOnly as readonly bigint[];
+        const price = priceOnly as readonly bigint[];
         setState({
           ...EMPTY,
+          oracle: {
+            answerWad: price[0],
+            roundId: price[1],
+            updatedAt: price[2],
+            provenAt: price[3],
+            sourceHeight: price[4],
+            ctcUsdWad: ctcOnly as bigint,
+            fresh: freshOnly as boolean,
+          },
           telemetry: {
             tier1Total: only[0],
             tier2Pool: only[1],

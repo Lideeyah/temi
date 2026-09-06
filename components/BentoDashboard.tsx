@@ -45,7 +45,9 @@ const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 import { DepositModal } from './DepositModal';
 import { RegisterAssetModal } from './RegisterAssetModal';
 import { SpatialSweepModal } from './SpatialSweepModal';
-import { LiveValuationCard } from './LiveValuationCard';
+import { LiveRateLine } from './LiveRate';
+import { NetworkPill, StatusBar } from './NetworkStatus';
+import { HeroStats } from './HeroStats';
 import { PendingClaimsCard } from './PendingClaimsCard';
 import { AccountDrawer, AccountPill } from './AccountDrawer';
 import { VaultSetup, UninitializedBadge } from './VaultSetup';
@@ -145,13 +147,14 @@ export function BentoDashboard() {
   const money = useCallback((wei: bigint) => formatAmount(wei, denomination), [denomination]);
 
   return (
-    <div className="min-h-dvh bg-paper">
+    <div className="flex min-h-dvh flex-col bg-paper">
       <Header
         account={account}
         denomination={denomination}
         onDenominationChange={setDenomination}
         onOpenAccount={() => setAccountDrawer('Merchant account')}
         initialized={vault.initialized}
+        blockNumber={vault.blockNumber}
       />
 
       <main className="mx-auto w-full max-w-[1240px] px-4 pb-16 pt-5 sm:px-6">
@@ -183,30 +186,33 @@ export function BentoDashboard() {
           </div>
         ) : null}
 
+        {isVaultConfigured && vault.initialized ? (
+          <div className="mx-auto w-full max-w-4xl">
+            <HeroStats vault={vault} money={money} denomination={denomination} />
+          </div>
+        ) : null}
+
         {/* Until a merchant has funded or registered anything there is no ledger to render —
             only zeros. Show them the one thing they can act on instead. */}
         {isVaultConfigured && !vault.loading && !vault.initialized ? (
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-            <div className="lg:col-span-2">
-              <VaultSetup
-                connected={account.connected}
-                busy={initialising || account.busy}
-                onInitialize={(monthly) => void initializeVault(monthly)}
-              />
-            </div>
-            {/* The live network stays visible throughout: it is the part that proves the
-                protocol is real, and it does not depend on the visitor having an account. */}
-            <AttestcoinConsole
-              vault={vault}
-              money={money}
-              walletClient={account.walletClient}
-              account={account.address}
+          <div className="mx-auto w-full max-w-3xl">
+            <VaultSetup
+              connected={account.connected}
+              busy={initialising || account.busy}
+              onInitialize={(monthly) => void initializeVault(monthly)}
+              rateLine={
+                <LiveRateLine
+                  oracle={vault.oracle}
+                  walletClient={account.walletClient}
+                  account={account.address}
+                  onRefreshed={() => void vault.refresh()}
+                />
+              }
             />
           </div>
         ) : (
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+        <div className="mx-auto grid w-full max-w-4xl grid-cols-1 gap-3 lg:grid-cols-2">
           <ReserveTile
-            className="lg:col-span-2"
             vault={vault}
             money={money}
             denomination={denomination}
@@ -239,15 +245,11 @@ export function BentoDashboard() {
             connected={account.connected}
           />
 
-          <AttestcoinConsole
-            vault={vault}
-            money={money}
-            walletClient={account.walletClient}
-            account={account.address}
-          />
         </div>
         )}
       </main>
+
+      <StatusBar />
 
       <AccountDrawer
         open={accountDrawer !== null}
@@ -302,12 +304,14 @@ function Header({
   onDenominationChange,
   onOpenAccount,
   initialized,
+  blockNumber,
 }: {
   account: ReturnType<typeof useMerchantAccount>;
   denomination: Denomination;
   onDenominationChange: (d: Denomination) => void;
   onOpenAccount: () => void;
   initialized: boolean;
+  blockNumber: bigint | null;
 }) {
   return (
     <header className="sticky top-0 z-30 border-b border-hairline bg-paper/92 backdrop-blur-sm">
@@ -320,14 +324,7 @@ function Header({
         <div className="hidden h-5 w-px bg-hairline sm:block" aria-hidden />
 
         <div className="flex flex-wrap items-center gap-1.5">
-          <Badge tone="neutral">
-            <Blocks size={9} strokeWidth={2} />
-            cc3-testnet: {creditcoinTestnet.id}
-          </Badge>
-          <Badge tone="steel">
-            <Link2 size={9} strokeWidth={2} />
-            Attestcoin readability active
-          </Badge>
+          <NetworkPill blockNumber={blockNumber} />
           {!initialized ? <UninitializedBadge /> : null}
         </div>
 
@@ -457,6 +454,7 @@ function ReserveTile({
               </span>
             </div>
             <p className="mt-1 text-[10px] leading-snug text-slate-soft">
+              15% protocol performance fee applied to yield only — never to your principal.{' '}
               {!vault.revenue ? (
                 <>
                   This deployment predates the yield engine. Redeploy to enable it — the split is
@@ -711,130 +709,6 @@ function AssetCard({
         </button>
       ) : null}
     </article>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/*         TILE D — ATTESTCOIN READABILITY & TELEMETRY (1 col)         */
-/* ------------------------------------------------------------------ */
-
-function AttestcoinConsole({
-  vault,
-  money,
-  walletClient,
-  account,
-}: {
-  vault: ReturnType<typeof useVault>;
-  money: (wei: bigint) => string;
-  walletClient: ReturnType<typeof useMerchantAccount>['walletClient'];
-  account: ReturnType<typeof useMerchantAccount>['address'];
-}) {
-  const [attestedHeight, setAttestedHeight] = useState<number | null>(null);
-  const [proverUp, setProverUp] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    const poll = () => {
-      void getAttestedHeight(ATTESTCOIN_CHAIN_KEYS.ETHEREUM_SEPOLIA)
-        .then((h) => {
-          if (cancelled) return;
-          setAttestedHeight(h);
-          setProverUp(true);
-        })
-        .catch(() => !cancelled && setProverUp(false));
-    };
-    poll();
-    const timer = setInterval(poll, 30_000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, []);
-
-  const t = vault.telemetry;
-
-  return (
-    <Tile
-      eyebrow="Protocol console"
-      title="Attestcoin & telemetry"
-      action={<StatusDot tone={proverUp === false ? 'rust' : 'moss'} />}
-    >
-      <div className="-mx-1 px-1">
-        <p className="eyebrow mb-1 text-steel">Cross-chain readability</p>
-        <MetricRow label="Source chain" value="Ethereum Sepolia" tone="steel" />
-        <MetricRow label="Chain key" value={ATTESTCOIN_CHAIN_KEYS.ETHEREUM_SEPOLIA.toString()} tone="steel" />
-        <MetricRow
-          label="Attested height"
-          value={attestedHeight ? attestedHeight.toLocaleString() : proverUp === false ? 'prover down' : '—'}
-          tone={proverUp === false ? 'rust' : 'steel'}
-        />
-        <MetricRow label="Verify precompile" value={truncateAddress(ATTESTCOIN_VERIFIER_ADDRESS, 8, 6)} title={ATTESTCOIN_VERIFIER_ADDRESS} />
-        <MetricRow label="Proofs verified" value={(t?.crossChainCount ?? 0n).toString()} tone="steel" />
-        <MetricRow label="Value read in" value={money(t?.crossChainValue ?? 0n)} tone="steel" />
-        <MetricRow
-          label="Last proven block"
-          value={t && t.lastSourceHeight > 0n ? t.lastSourceHeight.toString() : '—'}
-        />
-        <MetricRow label="Read cost" value="0 ATC" tone="moss" />
-
-        <LiveValuationCard
-          oracle={vault.oracle}
-          walletClient={walletClient}
-          account={account}
-          onRefreshed={() => void vault.refresh()}
-        />
-
-        <div className="my-2.5 h-px bg-hairline" />
-
-        <p className="eyebrow mb-1">Settlement chain</p>
-        <MetricRow label="Block height" value={vault.blockNumber ? vault.blockNumber.toString() : '—'} />
-        <MetricRow label="Tier 1 aggregate" value={money(t?.tier1Total ?? 0n)} />
-        <MetricRow label="Tier 2 pool" value={money(t?.tier2Pool ?? 0n)} tone="moss" />
-        <MetricRow label="Conduit backing" value={money(t?.conduitBacking ?? 0n)} />
-        <MetricRow label="Claims settled" value={(t?.claimsSettled ?? 0n).toString()} />
-        <MetricRow label="Value disbursed" value={money(t?.valueDisbursed ?? 0n)} tone="rust" />
-
-        <div className="my-2.5 h-px bg-hairline" />
-
-        <p className="eyebrow mb-1">Protocol revenue</p>
-        <MetricRow label="Settlement fee" value="1.5% of payout" tone="ochre" />
-        <MetricRow label="Yield spread" value="15% of yield" tone="ochre" />
-        <MetricRow
-          label="Fees collected"
-          value={vault.revenue ? money(vault.revenue.totalProtocolFees) : 'not on this deployment'}
-        />
-        <MetricRow label="Yield to operators" value={money(vault.revenue?.totalYieldDistributed ?? 0n)} tone="moss" />
-        <MetricRow
-          label="Yield strategy"
-          value={
-            vault.revenue && vault.revenue.yieldStrategy !== ZERO_ADDRESS
-              ? truncateAddress(vault.revenue.yieldStrategy, 8, 6)
-              : 'none connected'
-          }
-          tone={vault.revenue && vault.revenue.yieldStrategy !== ZERO_ADDRESS ? 'moss' : 'rust'}
-        />
-
-        <div className="my-2.5 h-px bg-hairline" />
-
-        <p className="eyebrow mb-1">Attestation invariants</p>
-        <MetricRow label="Tremor floor σ" value="≥ 0.0100" tone="ochre" />
-        <MetricRow label="Parallax floor" value="≥ 850 / 1000" tone="ochre" />
-        <MetricRow label="Spatial lock" value="H3 res 10 · ±100 m" tone="ochre" />
-        <MetricRow label="Tier 2 draw cap" value="10% pool · 3× lifetime" tone="ochre" />
-      </div>
-
-      {TEMI_VAULT_ADDRESS ? (
-        <a
-          href={blockscoutAddress(TEMI_VAULT_ADDRESS)}
-          target="_blank"
-          rel="noreferrer"
-          className="focus-ring mt-3 inline-flex items-center gap-1.5 text-[11px] text-ink underline underline-offset-2"
-        >
-          TemiVault on Blockscout
-          <ArrowUpRight size={11} strokeWidth={1.75} />
-        </a>
-      ) : null}
-    </Tile>
   );
 }
 
