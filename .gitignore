@@ -10,7 +10,6 @@ artifacts
 next-env.d.ts
 .vercel
 .deployer.json
-.claude
 
 # Vendored Tesseract runtime — regenerate with `npm run vendor:ocr`
 public/tesseract
