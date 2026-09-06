@@ -125,9 +125,15 @@ more than they ever contributed.
 ```bash
 npm install
 npm run compile          # solc 0.8.28 → artifacts/ + typed ABIs in lib/abi/
-npm test                 # parallax + tremor maths, then the live Attestcoin path
-npm run dev
+npm test                 # bytecode-level vault tests, serial matcher, sensor maths,
+                         # then the Attestcoin path against live infrastructure
+npm run dev              # vendors the Tesseract runtime first, then serves
 ```
+
+`npm run dev` and `npm run build` both run `vendor:ocr`, which copies the Tesseract worker and
+WASM core out of `node_modules` and fetches the English model into `public/tesseract`. It is
+gitignored — 16 MB of binaries do not belong in the repo — and reproduced automatically. Serving
+it from our own origin is what lets a claim be filed on a bad connection.
 
 ### Deploying
 

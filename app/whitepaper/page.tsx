@@ -324,7 +324,9 @@ reject if parallaxScore < 850                       ERR_PARALLAX_REJECTED`}</Cod
                 cropped at full resolution three times around the sweep midpoint, binarised, and
                 read by an OCR pass running entirely on the device. The resulting hash is passed
                 to <Mono>settleClaim</Mono>, which requires it to equal the assetId for movable
-                hardware.
+                hardware. The Tesseract runtime is served from Tèmi&apos;s own origin rather than
+                a CDN, so the claim path survives the bad connection a merchant is most likely to
+                have during an emergency.
               </P>
               <Claim>
                 Parallax proves the claimant is standing in front of something real. Only the

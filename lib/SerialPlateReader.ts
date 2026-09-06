@@ -26,8 +26,9 @@ import { keccak256, stringToHex, type Hex } from 'viem';
  * the variants too, which recovers most single- and double-character misreads without ever
  * loosening the equality check itself.
  *
- * Everything runs in the browser. Tesseract's worker and language data are served from the
- * app's own origin, so no image and no text ever leaves the device.
+ * Everything runs in the browser, and the Tesseract runtime is vendored into `public/tesseract`
+ * and served from our own origin — so no image and no text ever leaves the device, and the
+ * claim path keeps working when the connection does not.
  */
 
 /** Where the merchant is asked to hold the plate, as a fraction of the video frame. */
@@ -217,7 +218,16 @@ async function getWorker(): Promise<TesseractWorker> {
   if (!workerPromise) {
     workerPromise = (async () => {
       const { createWorker, PSM } = await import('tesseract.js');
-      const worker = await createWorker('eng');
+      // Served from our own origin, not jsdelivr. Recognition is local either way, but the
+      // default runtime download would fail on a bad connection — which is precisely the
+      // situation a merchant filing an emergency claim is likely to be in. Vendored by
+      // `npm run vendor:ocr`.
+      const worker = await createWorker('eng', undefined, {
+        workerPath: '/tesseract/worker.min.js',
+        corePath: '/tesseract',
+        langPath: '/tesseract',
+        gzip: true,
+      });
       await worker.setParameters({
         // A serial plate is a single line of uppercase alphanumerics.
         tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-',
