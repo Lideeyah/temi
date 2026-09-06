@@ -24,8 +24,9 @@ const CHALLENGER = '0x3333333333333333333333333333333333333333';
 const BYSTANDER = '0x4444444444444444444444444444444444444444';
 const GOOD = { jitter: 2757n, parallax: 901n };
 const HOUR = 3600n;
-/** Claim money arrives net of the 1.5% settlement fee; bonds and stakes return whole. */
-const netOf = (gross) => gross - (gross * 150n) / 10000n;
+/** The 1.5% fee applies to the mutual draw only. Tier 1, bonds and stakes come back whole. */
+const feeOnTier2 = (tier2) => (tier2 * 150n) / 10000n;
+const netOf = (tier2) => tier2 - feeOnTier2(tier2);
 
 const assetId = (s) => keccak256(toHex(s));
 
@@ -65,7 +66,7 @@ console.log('\n[1] A merchant taking back their own Tier 1 is never delayed');
 
   check('settles', r.ok, r.revert);
   check('no escrow opened', r.value?.[1] === 0n, `claimId ${r.value?.[1]}`);
-  check('paid immediately, net of the settlement fee', after - before === netOf(E('80')), fmt(after - before));
+  check('own money returns untaxed — no fee on a Tier 1 draw', after - before === E('80'), fmt(after - before));
   await assertSolvent(chain, vault, 'after instant claim');
 }
 
@@ -82,7 +83,9 @@ console.log('\n[2] A small mutual-buffer draw also settles instantly');
   const r = await chain.call(vault, 'settleClaim', [id, E('9'), GOOD.jitter, GOOD.parallax, 0n, id], { from: MERCHANT });
   const after = await chain.balanceOf(MERCHANT);
   check('no escrow for a sub-1% draw', r.value?.[1] === 0n);
-  check('paid immediately, net of fee', after - before === netOf(E('9')), fmt(after - before));
+  // Tier 1 is 8.5; the claim of 9 draws 0.5 from the buffer, and only that 0.5 is charged.
+  check('fee falls on the mutual slice alone',
+    after - before === E('9') - feeOnTier2(E('0.5')), fmt(after - before));
 }
 
 /* ================================================================== */
@@ -113,8 +116,8 @@ let bond;
   console.log(`  escrowed ${fmt(claim[2])}  bond ${fmt(bond)}  paid now ${fmt(after - before)}`);
   check('tier2 escrowed, not paid', claim[2] === quote[1]);
   check('bond is 10% of the escrow', bond === (quote[1] * 1000n) / 10000n);
-  check('immediate payout is tier1 less the bond, net of fee',
-    after - before === netOf(quote[0] - bond), fmt(after - before));
+  check('immediate Tier 1 payment carries no fee',
+    after - before === quote[0] - bond, fmt(after - before));
   check('status is Pending', claim[7] === 1);
   await assertSolvent(chain, vault, 'with an open escrow');
 }
@@ -142,7 +145,7 @@ console.log('\n[5] Unchallenged, it pays out — and anyone can trigger that');
   const after = await chain.balanceOf(MERCHANT);
   check('a bystander can finalise', fin.ok, fin.revert);
   const claim = (await chain.call(vault, 'pendingClaims', [claimId], { from: MERCHANT })).value;
-  check('escrow released net of fee, bond returned whole',
+  check('mutual escrow released net of fee, bond returned whole',
     after - before === netOf(claim[2]) + claim[3], fmt(after - before));
   check('status is Settled', claim[7] === 3);
   check('nothing left escrowed', (await chain.call(vault, 'totalEscrowed', [], { from: TREASURY })).value === 0n);

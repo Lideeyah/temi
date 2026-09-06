@@ -10,7 +10,7 @@ import { createChain } from './evm-harness.mjs';
 
 const E = parseEther;
 const fmt = (w) => `${Number(formatEther(w)).toFixed(4)} tCTC`;
-const netOf = (g) => g - (g * 150n) / 10000n;
+const feeOnTier2 = (tier2) => (tier2 * 150n) / 10000n;
 
 let failures = 0;
 const check = (name, cond, detail) => {
@@ -63,21 +63,41 @@ check('withdrawals are free', afterWd - beforeWd === E('10'), fmt(afterWd - befo
 check('still no fees taken', (await chain.call(vault, 'totalProtocolFees', [], { from: TREASURY })).value === 0n);
 
 /* ---------------------------------------------------------------- */
-console.log('\n[3] 1.5% on a delivered claim, taken atomically');
+console.log('\n[3] A claim covered entirely by the operator\'s own reserve is free');
+const ownOnly = E('20'); // Tier 1 is 75 after the earlier withdrawal, so this is all Tier 1.
+const protoBeforeOwn = await chain.balanceOf(PROTOCOL);
+const merchBeforeOwn = await chain.balanceOf(MERCHANT);
+const rOwn = await chain.call(vault, 'settleClaim', [gen, ownOnly, GOOD.jitter, GOOD.parallax, 0n, gen], { from: MERCHANT });
+const protoAfterOwn = await chain.balanceOf(PROTOCOL);
+const merchAfterOwn = await chain.balanceOf(MERCHANT);
+console.log(`  claimed ${fmt(ownOnly)} entirely from Tier 1 -> merchant ${fmt(merchAfterOwn - merchBeforeOwn)}, protocol ${fmt(protoAfterOwn - protoBeforeOwn)}`);
+check('settled', rOwn.ok, rOwn.revert);
+check('protocol earns nothing on a pure Tier 1 draw', protoAfterOwn - protoBeforeOwn === 0n);
+check('merchant receives every wei', merchAfterOwn - merchBeforeOwn === ownOnly, fmt(merchAfterOwn - merchBeforeOwn));
+check('no arbitrage against withdrawTier1 — both routes cost the same', merchAfterOwn - merchBeforeOwn === ownOnly);
+
+console.log('\n[3b] 1.5% on the mutual draw, taken atomically');
+// Drain Tier 1 so the next claim has to reach the buffer.
+const remainingTier1 = (await chain.call(vault, 'getReserve', [MERCHANT], { from: MERCHANT })).value.tier1PersonalBalance;
+await chain.call(vault, 'withdrawTier1', [remainingTier1], { from: MERCHANT });
+
+const mutualAsset = assetId('gen-mutual');
+await chain.call(vault, 'registerAsset', [mutualAsset, 0, E('400'), 0n, 0n, 3n], { from: MERCHANT });
 const protoBefore = await chain.balanceOf(PROTOCOL);
 const merchBefore = await chain.balanceOf(MERCHANT);
-const claim = E('20');
-const r = await chain.call(vault, 'settleClaim', [gen, claim, GOOD.jitter, GOOD.parallax, 0n, gen], { from: MERCHANT });
+// Small enough to stay on the instant path: with Tier 1 empty there is nothing to withhold a
+// bond from, and an escrowed claim would (correctly) revert with BondRequired.
+const claim = E('0.1');
+const r = await chain.call(vault, 'settleClaim', [mutualAsset, claim, GOOD.jitter, GOOD.parallax, 0n, mutualAsset], { from: MERCHANT });
 const protoAfter = await chain.balanceOf(PROTOCOL);
 const merchAfter = await chain.balanceOf(MERCHANT);
 
-const expectedFee = (claim * 150n) / 10000n;
-console.log(`  gross ${fmt(claim)}  fee ${fmt(protoAfter - protoBefore)}  net ${fmt(merchAfter - merchBefore)}`);
+const expectedFee = feeOnTier2(claim); // Tier 1 is empty, so the whole claim is a mutual draw
+console.log(`  mutual draw ${fmt(claim)}  fee ${fmt(protoAfter - protoBefore)}  net ${fmt(merchAfter - merchBefore)}`);
 check('settled', r.ok, r.revert);
-check('fee is exactly 1.5%', protoAfter - protoBefore === expectedFee, fmt(protoAfter - protoBefore));
-check('merchant receives 98.5%', merchAfter - merchBefore === netOf(claim), fmt(merchAfter - merchBefore));
+check('fee is exactly 1.5% of the mutual draw', protoAfter - protoBefore === expectedFee, fmt(protoAfter - protoBefore));
+check('merchant receives the rest', merchAfter - merchBefore === claim - expectedFee, fmt(merchAfter - merchBefore));
 check('gross is conserved', (protoAfter - protoBefore) + (merchAfter - merchBefore) === claim);
-check('fee accounted', (await chain.call(vault, 'totalProtocolFees', [], { from: TREASURY })).value === expectedFee);
 
 /* ---------------------------------------------------------------- */
 console.log('\n[4] A rejected claim earns the protocol nothing');
@@ -107,6 +127,10 @@ check('no fee charged on the escrowed portion of a rejected claim', feesAfterRej
 
 /* ---------------------------------------------------------------- */
 console.log('\n[5] Yield: 85% to operators, 15% to the protocol');
+// The merchant's Tier 1 was drained in [3b] to force a mutual draw. Yield accrues pro-rata to
+// Tier 1, so they need a balance again before a distribution can reach them.
+await chain.call(vault, 'depositReserve', [], { from: MERCHANT, value: E('100') });
+
 const noStrategy = (await chain.call(vault, 'yieldStrategy', [], { from: TREASURY })).value;
 check('no yield strategy is connected', noStrategy === '0x0000000000000000000000000000000000000000', noStrategy);
 

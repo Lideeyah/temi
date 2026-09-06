@@ -72,6 +72,8 @@ interface ClaimQuote {
   tier2Draw: bigint;
   instant: boolean;
   bondRequired: bigint;
+  settlementFee: bigint;
+  netPayout: bigint;
 }
 
 interface SettlementReceipt {
@@ -80,6 +82,10 @@ interface SettlementReceipt {
   payout: bigint;
   /** Before the fee, as the solvency invariant computed it. */
   gross: bigint;
+  /** From the operator's own reserve. Never charged. */
+  tier1Part: bigint;
+  /** From the mutual buffer. The only fee-bearing component. */
+  tier2Part: bigint;
   fee: bigint;
   blockNumber: bigint;
 }
@@ -161,8 +167,15 @@ export function SpatialSweepModal({
         })
         .then((raw) => {
           if (cancelled) return;
-          const q = raw as readonly [bigint, bigint, boolean, bigint];
-          setQuote({ tier1Draw: q[0], tier2Draw: q[1], instant: q[2], bondRequired: q[3] });
+          const q = raw as readonly [bigint, bigint, boolean, bigint, bigint, bigint];
+          setQuote({
+            tier1Draw: q[0],
+            tier2Draw: q[1],
+            instant: q[2],
+            bondRequired: q[3],
+            settlementFee: q[4],
+            netPayout: q[5],
+          });
         })
         .catch(() => !cancelled && setQuote(null));
     }, 250);
@@ -389,6 +402,8 @@ export function SpatialSweepModal({
       let payout = 0n;
       let gross = 0n;
       let fee = 0n;
+      let tier1Part = 0n;
+      let tier2Part = 0n;
       for (const log of txReceipt.logs) {
         if (log.address.toLowerCase() !== TEMI_VAULT_ADDRESS.toLowerCase()) continue;
         try {
@@ -403,7 +418,14 @@ export function SpatialSweepModal({
           // Read the fee from the chain rather than recomputing it here — the receipt should
           // show what was actually taken, not what the client believes the rate to be.
           if (decoded.eventName === 'SettlementFeeTaken') {
-            const args = decoded.args as { gross: bigint; fee: bigint; net: bigint };
+            const args = decoded.args as {
+              tier1Part: bigint;
+              tier2Part: bigint;
+              fee: bigint;
+              net: bigint;
+            };
+            tier1Part += args.tier1Part;
+            tier2Part += args.tier2Part;
             fee += args.fee;
             payout += args.net;
           }
@@ -428,7 +450,7 @@ export function SpatialSweepModal({
         }
       }
 
-      setReceipt({ txHash: hash, payout, gross, fee, blockNumber: txReceipt.blockNumber });
+      setReceipt({ txHash: hash, payout, gross, tier1Part, tier2Part, fee, blockNumber: txReceipt.blockNumber });
       setPhase('settled');
       onSettled();
 
@@ -513,8 +535,10 @@ export function SpatialSweepModal({
           {quote && quote.tier2Draw > 0n ? (
             <div className="border border-hairline bg-paper-raised px-3.5 py-3">
               <p className="eyebrow mb-2">What this claim would do</p>
-              <MetricRow label="From your own vault" value={`${formatTctc(quote.tier1Draw)} tCTC`} />
+              <MetricRow label="From your own vault · no fee" value={`${formatTctc(quote.tier1Draw)} tCTC`} />
               <MetricRow label="From the mutual buffer" value={`${formatTctc(quote.tier2Draw)} tCTC`} tone="moss" />
+              <MetricRow label="Fee · 1.5% of the mutual draw" value={`−${formatTctc(quote.settlementFee)} tCTC`} tone="rust" />
+              <MetricRow label="You receive" value={`${formatTctc(quote.netPayout)} tCTC`} />
               {quote.instant ? (
                 <p className="mt-1.5 text-[10.5px] leading-snug text-moss">
                   Small enough to settle in one block. You are paid immediately.
@@ -753,6 +777,8 @@ export function SpatialSweepModal({
             <p className="eyebrow mb-2">Settlement</p>
 
             {/* Itemised, because a fee a merchant discovers afterwards is a fee they resent. */}
+            {/* Split by source, because the fee only touches one of them. A merchant should be
+                able to see that drawing their own money cost them nothing. */}
             <div className="mb-2 space-y-1 border-b border-hairline pb-2">
               <div className="flex items-baseline justify-between">
                 <span className="text-[11px] text-slate-soft">Claimed loss</span>
@@ -761,11 +787,22 @@ export function SpatialSweepModal({
                 </span>
               </div>
               <div className="flex items-baseline justify-between">
-                <span className="text-[11px] text-slate-soft">Gross invariant payout</span>
-                <span className="tabular text-[11px] text-ink">₦{formatNgn(receipt.gross)}</span>
+                <span className="text-[11px] text-slate-soft">
+                  Tier 1 draw · your own funds
+                </span>
+                <span className="tabular text-[11px] text-ink">
+                  ₦{formatNgn(receipt.tier1Part)}
+                  <span className="ml-1.5 text-[9.5px] text-moss">0% fee</span>
+                </span>
               </div>
               <div className="flex items-baseline justify-between">
-                <span className="text-[11px] text-slate-soft">Protocol settlement fee · 1.5%</span>
+                <span className="text-[11px] text-slate-soft">Tier 2 draw · mutual buffer</span>
+                <span className="tabular text-[11px] text-moss">₦{formatNgn(receipt.tier2Part)}</span>
+              </div>
+              <div className="flex items-baseline justify-between">
+                <span className="text-[11px] text-slate-soft">
+                  Mutual settlement fee · 1.5% of Tier 2
+                </span>
                 <span className="tabular text-[11px] text-rust">−₦{formatNgn(receipt.fee)}</span>
               </div>
             </div>

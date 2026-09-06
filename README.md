@@ -154,6 +154,36 @@ downstream is one code path.
 Not account abstraction: no smart account, no session keys, no recovery, and sponsorship is a
 rate-limited drip rather than a paymaster. Losing the phone loses the vault.
 
+## Protocol revenue
+
+No premium, so the protocol earns only on delivery:
+
+| Stream | Rate | Charged on |
+| --- | --- | --- |
+| Mutual settlement fee | 1.5% | the **Tier 2 draw only** — never Tier 1 |
+| Yield spread | 15% | yield only, never principal |
+| Deposits / withdrawals / rejected claims | — | nothing |
+
+The fee deliberately spares the Tier 1 draw. Charging it would contradict the guarantee the
+product rests on — that your own reserve is unencumbered — and it would be arbitrageable, since
+`withdrawTier1()` is free: anyone whose loss was covered by their own balance would withdraw
+instead of claiming, bypassing the attestation pipeline for exactly the small repairs it should be
+capturing.
+
+```
+Claimed loss                          ₦120,000
+Tier 1 draw · own funds                ₦50,000   0% fee
+Tier 2 draw · mutual buffer            ₦70,000
+Mutual settlement fee · 1.5% of Tier 2  −₦1,050
+Net dispatched                        ₦118,950
+```
+
+**Nothing is generating yield today.** `yieldStrategy` is `address(0)` and the UI says so.
+Creditcoin exposes no staking precompile to the EVM, so a contract cannot nominate validators;
+PenguinSwap is live on testnet but we could not verify a router or USD1 address on cc3-testnet.
+The 85/15 accounting is built and tested behind a payable, permissionless `distributeYield()` —
+the split is the part that has to be right, and it is the same wherever the yield comes from.
+
 ## Optimistic settlement
 
 A browser cannot prove where a sensor reading came from, so large draws on *other people's*

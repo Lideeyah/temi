@@ -194,11 +194,20 @@ contract TemiVault {
 
     /* ---------------- protocol revenue ---------------- */
 
-    /// @notice Taken from a claim payout, in basis points. 150 = 1.5%.
-    /// @dev    Charged only when the protocol actually delivers money to a merchant. There is no
-    ///         premium, no subscription and no fee on deposits or withdrawals — an operator who
-    ///         never claims pays nothing, ever. A rejected claim is not a delivery and is not
-    ///         charged.
+    /// @notice Taken from the mutual buffer's contribution to a payout, in basis points.
+    /// @dev    Charged on the Tier 2 draw only, never on Tier 1.
+    ///
+    ///         Tier 1 is the operator's own money and `withdrawTier1` hands it back for nothing.
+    ///         Charging to receive it through a claim would be charging for a service already
+    ///         available free — and worse, it would be arbitrageable: a merchant whose loss is
+    ///         covered by their own balance would withdraw instead of claiming, skipping the
+    ///         attestation pipeline entirely and learning to route around the protocol for
+    ///         exactly the small, frequent repairs it should be capturing.
+    ///
+    ///         Charging the mutual draw alone puts the fee where the service is: the protocol
+    ///         earns if and only if the community buffer steps in and multiplies an operator's
+    ///         capital beyond what they put in. No premium, no subscription, nothing on deposits
+    ///         or withdrawals, and nothing at all on a rejected claim.
     uint256 public constant PROTOCOL_SETTLEMENT_FEE_BPS = 150;
 
     /// @notice The protocol's share of yield earned on idle reserves. 1500 = 15%.
@@ -366,7 +375,13 @@ contract TemiVault {
     );
     event ArbiterSet(address previous, address current);
     event ProtocolTreasurySet(address previous, address current);
-    event SettlementFeeTaken(address indexed operator, uint256 gross, uint256 fee, uint256 net);
+    event SettlementFeeTaken(
+        address indexed operator,
+        uint256 tier1Part,
+        uint256 tier2Part,
+        uint256 fee,
+        uint256 net
+    );
     event YieldDistributed(uint256 total, uint256 toOperators, uint256 toProtocol, uint256 indexDelta);
     event YieldCompounded(address indexed operator, uint256 amount, uint256 newTier1Balance);
     event YieldStrategySet(address previous, address current);
@@ -948,8 +963,8 @@ contract TemiVault {
         if (tier2Draw <= instantCap) {
             totalClaimsSettled += 1;
             totalValueDisbursed += tier1Draw + tier2Draw;
-            // Net of the settlement fee. Any bond sent is not a payout and returns whole.
-            payout = _disburseClaim(msg.sender, tier1Draw + tier2Draw);
+            // Only the mutual draw is charged. Any bond sent is not a payout and returns whole.
+            payout = _disburseClaim(msg.sender, tier1Draw, tier2Draw);
             _pay(msg.sender, msg.value);
             return (payout, 0);
         }
@@ -981,9 +996,9 @@ contract TemiVault {
         });
         totalEscrowed += tier2Draw + bond;
 
-        // The Tier 1 portion is delivered now, so it is charged now. The escrowed portion is
-        // charged when it is actually released, and not at all if the claim is rejected.
-        payout = _disburseClaim(msg.sender, tier1Draw);
+        // Tier 1 is delivered now and carries no fee. The escrowed mutual portion is charged
+        // when it is actually released, and not at all if the claim is rejected.
+        payout = _disburseClaim(msg.sender, tier1Draw, 0);
 
         emit ClaimEscrowed(
             claimId,
@@ -1018,7 +1033,8 @@ contract TemiVault {
         totalClaimsSettled += 1;
         totalValueDisbursed += claim.escrowedTier2;
 
-        released = _disburseClaim(claim.claimant, claim.escrowedTier2);
+        // Everything escrowed came from the mutual buffer, so all of it is fee-bearing.
+        released = _disburseClaim(claim.claimant, 0, claim.escrowedTier2);
         _pay(claim.claimant, claim.bond); // their own stake, returned whole
 
         emit ClaimFinalised(claimId, claim.claimant, released + claim.bond);
@@ -1085,18 +1101,40 @@ contract TemiVault {
         totalClaimsSettled += 1;
         totalValueDisbursed += escrow;
 
-        uint256 net = _disburseClaim(claimant, escrow);
+        uint256 net = _disburseClaim(claimant, 0, escrow);
         _pay(claimant, bond + challengeBond); // own stake back, plus the failed challenger's
 
         emit ClaimFinalised(claimId, claimant, net + bond + challengeBond);
     }
 
-    /// @notice What a claim would do right now, so the interface can say so before it is signed.
+    /// @notice What a claim would do right now, so the interface can show it before it is signed.
+    /// @dev    Mirrors `settleClaim` exactly, including the declared-value cap and the fact that
+    ///         only the mutual draw is charged. A merchant should never learn the shape of their
+    ///         settlement from the receipt.
+    /// @return tier1Draw     From the operator's own reserve. Fee-free.
+    /// @return tier2Draw     From the mutual buffer. The fee-bearing part.
+    /// @return instant       Whether this settles in the same block or waits out a challenge.
+    /// @return bondRequired  Extra tCTC the caller must send, beyond what can be withheld.
+    /// @return settlementFee What the protocol takes.
+    /// @return netPayout     What reaches the merchant.
     function quoteClaim(bytes32 assetId, uint256 claimedLoss, address claimant)
         external
         view
-        returns (uint256 tier1Draw, uint256 tier2Draw, bool instant, uint256 bondRequired)
+        returns (
+            uint256 tier1Draw,
+            uint256 tier2Draw,
+            bool instant,
+            uint256 bondRequired,
+            uint256 settlementFee,
+            uint256 netPayout
+        )
     {
+        Asset memory asset = _assets[assetId];
+        // Settlement refuses a claim above the declared value, so a quote must too.
+        if (asset.declaredValue != 0 && claimedLoss > asset.declaredValue) {
+            claimedLoss = asset.declaredValue;
+        }
+
         UserReserve storage reserve = reserves[claimant];
         tier1Draw = claimedLoss < reserve.tier1PersonalBalance ? claimedLoss : reserve.tier1PersonalBalance;
 
@@ -1118,6 +1156,9 @@ contract TemiVault {
         // Only the part the claimant cannot cover from their own payout needs new funds.
         if (bondRequired > tier1Draw) bondRequired -= tier1Draw;
         else bondRequired = 0;
+
+        settlementFee = (tier2Draw * PROTOCOL_SETTLEMENT_FEE_BPS) / BPS_DENOMINATOR;
+        netPayout = tier1Draw + tier2Draw - settlementFee;
     }
 
     function _pay(address to, uint256 amount) private {
@@ -1126,22 +1167,28 @@ contract TemiVault {
         if (!ok) revert TransferFailed();
     }
 
-    /// @notice Pay a claim, net of the settlement fee.
+    /// @notice Pay a claim, net of the settlement fee on its mutual-buffer portion.
     /// @dev    Every path that hands claim money to a merchant goes through here, so the fee is
     ///         charged exactly once per unit disbursed and cannot be forgotten on a new path.
     ///         Returning a bond or a challenger's stake does not go through here: that is the
     ///         operator's own money coming back, not a payout.
-    function _disburseClaim(address to, uint256 gross) private returns (uint256 net) {
+    /// @param tier1Part The operator's own reserve. Never charged.
+    /// @param tier2Part The mutual buffer's contribution. The only fee-bearing component.
+    function _disburseClaim(address to, uint256 tier1Part, uint256 tier2Part)
+        private
+        returns (uint256 net)
+    {
+        uint256 gross = tier1Part + tier2Part;
         if (gross == 0) return 0;
 
-        uint256 fee = (gross * PROTOCOL_SETTLEMENT_FEE_BPS) / BPS_DENOMINATOR;
+        uint256 fee = (tier2Part * PROTOCOL_SETTLEMENT_FEE_BPS) / BPS_DENOMINATOR;
         net = gross - fee;
 
         if (fee > 0) {
             totalProtocolFees += fee;
             _pay(protocolTreasury, fee);
         }
-        emit SettlementFeeTaken(to, gross, fee, net);
+        emit SettlementFeeTaken(to, tier1Part, tier2Part, fee, net);
         _pay(to, net);
     }
 

@@ -17,6 +17,7 @@ const CONTENTS = [
   ['2', 'The dual reserve', 'reserve'],
   ['3', 'Solvency invariant', 'invariant'],
   ['3b', 'Optimistic settlement', 'optimistic'],
+  ['3c', 'Protocol revenue', 'revenue'],
   ['4', 'Physical attestation', 'attestation'],
   ['5', 'Spatial lock', 'spatial'],
   ['6', 'Attestcoin readability', 'attestcoin'],
@@ -325,6 +326,97 @@ tier2Draw >  instantCap   ->  tier1Draw paid immediately
                   ['Challenge rejected', 'escrow + bond + the stake', 'loses the stake', 'unchanged'],
                 ]}
                 caption="Every branch is asserted in tests/challenge.test.mjs against the real bytecode, including that the contract's balance still covers Tier 1 plus the pool plus everything escrowed at each step."
+              />
+            </Section>
+
+            {/* ---------------------------------------------------- */}
+            <Section id="revenue" index="3c" title="Protocol revenue">
+              <P>
+                Tèmi charges no premium, so it cannot earn like an insurer. Two streams replace
+                that, and both share a property: the protocol is paid only when it has actually
+                delivered something.
+              </P>
+
+              <H3>A settlement fee on the mutual draw</H3>
+              <P>
+                A claim is charged 150 basis points — but only on the part that comes out of the
+                mutual buffer. The Tier 1 portion is untouched.
+              </P>
+              <Claim>
+                The protocol earns if and only if the community buffer steps in and multiplies an
+                operator&apos;s capital beyond what they put in.
+              </Claim>
+              <P>
+                An earlier version charged the whole payout, and it was wrong twice over. It
+                contradicted the guarantee the product is built on — that Tier 1 is unencumbered
+                and entirely yours — by putting an exit toll on a merchant withdrawing their own
+                savings during an emergency. And it was arbitrageable: because{' '}
+                <Mono>withdrawTier1</Mono> is free, anyone whose loss was covered by their own
+                balance would simply withdraw instead of claiming. The fee would have taught
+                merchants to bypass the attestation pipeline for precisely the small, frequent
+                repairs it exists to capture, and the protocol would have collected nothing while
+                losing its data.
+              </P>
+              <Code label="Worked example">{`Claimed loss                          ₦120,000
+Tier 1 draw · own funds                ₦50,000   0% fee
+Tier 2 draw · mutual buffer            ₦70,000
+Mutual settlement fee · 1.5% of Tier 2  −₦1,050
+Net dispatched                        ₦118,950`}</Code>
+              <P>
+                The fee is taken inside the settlement transaction, so there is no invoice to
+                chase and nothing to reconcile. Every path that hands claim money to a merchant
+                routes through one internal helper, which is what stops the charge being
+                forgotten when a new path is added. Deposits, withdrawals, returned bonds and a
+                failed challenger&apos;s forfeited stake are not payouts and are never charged.
+                Neither is a rejected claim.
+              </P>
+
+              <H3>A spread on yield, and nothing on principal</H3>
+              <P>
+                Tier 1 sits idle until an emergency, which is capital doing nothing. When it is
+                put to work, 85% of what it earns compounds into the operator&apos;s withdrawable
+                balance and 15% goes to the protocol. Distribution uses a cumulative index rather
+                than paying each holder in turn, so a distribution costs the same gas whether
+                there are ten merchants or ten thousand, and an operator who deposits after a
+                distribution cannot claim a share of it.
+              </P>
+              <Claim>
+                The spread is on yield only. The protocol never takes a share of principal.
+              </Claim>
+
+              <H3>Nothing is generating yield today</H3>
+              <P>
+                It would be easy to show an APY here, and it would be false.{' '}
+                <Mono>yieldStrategy</Mono> is <Mono>address(0)</Mono> and the interface says
+                &ldquo;none connected&rdquo;.
+              </P>
+              <P>
+                Creditcoin&apos;s precompile set is signature verification, hashing,{' '}
+                <Mono>SubstrateTransfer</Mono> and the USC verifiers. There is no staking
+                precompile, so a Solidity contract cannot nominate validators — the NPoS route
+                does not exist from the EVM today. PenguinSwap is live on testnet, but we could
+                not verify a router or USD1 address on cc3-testnet, and integrating against an
+                address we had not confirmed would be inventing one.
+              </P>
+              <P>
+                So the accounting is built, tested and waiting: <Mono>distributeYield</Mono> is
+                payable and permissionless, and whatever eventually earns the yield — a strategy
+                adapter, a validator payout — simply sends it in. The split and the per-operator
+                arithmetic are the parts that have to be correct, and they are the same regardless
+                of where the money came from.
+              </P>
+
+              <H3>Unit economics</H3>
+              <Table
+                head={['Stream', 'Rate', 'Charged when', 'Charged on']}
+                rows={[
+                  ['Mutual settlement fee', '1.5%', 'a claim is delivered', 'the Tier 2 draw only'],
+                  ['Yield spread', '15%', 'yield is distributed', 'yield only, never principal'],
+                  ['Deposits', '—', 'never', '—'],
+                  ['Withdrawals', '—', 'never', '—'],
+                  ['Rejected claims', '—', 'never', '—'],
+                ]}
+                caption="An operator who never claims and never earns yield pays nothing, ever. There is no premium to lose and no subscription to cancel."
               />
             </Section>
 
@@ -893,6 +985,10 @@ require answer > 0                        // a Chainlink answer is signed`}</Cod
                   ['Spatial resolution', 'H3 res 10 (~12,300 m², ~150 m across)', 'on-chain exact match'],
                   ['Settlement chain', `cc3-testnet ${creditcoinTestnet.id}`, '—'],
                   ['Attestcoin source chain', 'Ethereum Sepolia, key 1', 'trustedSourcePortal, write-once'],
+                  ['Settlement fee', '1.5% of the Tier 2 draw', 'PROTOCOL_SETTLEMENT_FEE_BPS'],
+                  ['Yield spread', '15% of yield', 'YIELD_PROTOCOL_SHARE_BPS'],
+                  ['Target reserve · machinery', '30% of declared value', 'TARGET_RESERVE_MOVABLE_BPS'],
+                  ['Target reserve · property', '20% of declared value', 'TARGET_RESERVE_PROPERTY_BPS'],
                   ['Challenge window', '24 hours', 'CHALLENGE_WINDOW'],
                   ['Instant settlement cap', '1% of the buffer', 'INSTANT_TIER2_CAP_BPS'],
                   ['Claim bond', '10% of the escrow', 'CLAIM_BOND_BPS'],
