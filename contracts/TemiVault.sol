@@ -222,6 +222,9 @@ contract TemiVault {
     error AmountMismatch(uint256 declared, uint256 attested);
     error InsufficientConduitBacking(uint256 requested, uint256 available);
     error NotTreasury();
+    error PortalAlreadyConfigured(uint64 chainKey);
+    error InvalidPortal();
+    error SerialPlateMismatch(bytes32 observed, bytes32 expected);
 
     modifier nonReentrant() {
         if (_reentrancyLock == 1) revert Reentrancy();
@@ -412,7 +415,15 @@ contract TemiVault {
     }
 
     /// @notice Register the portal contract this vault will accept Attestcoin proofs from.
+    /// @dev    Write-once per chain key. A mutable setter would let a compromised treasury
+    ///         repoint the vault at a portal it controls and mint reserve credit up to the
+    ///         available float, in one transaction and with no warning. Making it immutable
+    ///         removes that path entirely rather than slowing it down with a timelock: there
+    ///         is no legitimate reason to change where a chain's attested deposits come from.
     function setTrustedSourcePortal(uint64 chainKey, address portal) external onlyTreasury {
+        if (trustedSourcePortal[chainKey] != address(0)) revert PortalAlreadyConfigured(chainKey);
+        if (portal == address(0)) revert InvalidPortal();
+
         trustedSourcePortal[chainKey] = portal;
         emit TrustedSourcePortalSet(chainKey, portal);
     }
@@ -463,13 +474,18 @@ contract TemiVault {
     /// @param jitterVariance Accelerometer sigma * 10_000, measured over the 3s spatial sweep.
     /// @param parallaxScore  Motion-parallax score on a 0-1000 scale.
     /// @param liveH3Cell     H3 res-10 cell sampled at claim time. Must match for fixed property.
+    /// @param claimAssetHash keccak256 of the serial number read off the plate during the sweep.
+    ///                       Must equal the assetId for movable hardware, binding the claim to
+    ///                       the physical machine that was registered rather than to any damaged
+    ///                       object. Ignored for fixed property, which is bound spatially instead.
     /// @return payout        tCTC transferred to the caller.
     function settleClaim(
         bytes32 assetId,
         uint256 claimedLoss,
         uint256 jitterVariance,
         uint256 parallaxScore,
-        uint64 liveH3Cell
+        uint64 liveH3Cell,
+        bytes32 claimAssetHash
     ) external nonReentrant returns (uint256 payout) {
         Asset storage asset = _assets[assetId];
         if (asset.assetId == bytes32(0)) revert UnknownAsset(assetId);
@@ -485,8 +501,14 @@ contract TemiVault {
         if (parallaxScore < MIN_PARALLAX_SCORE) {
             revert ParallaxAttestationFailed(parallaxScore, MIN_PARALLAX_SCORE);
         }
-        if (asset.category == AssetCategory.FIXED_PROPERTY && liveH3Cell != asset.h3CellIndex) {
-            revert SpatialLockFailed(liveH3Cell, asset.h3CellIndex);
+        if (asset.category == AssetCategory.FIXED_PROPERTY) {
+            if (liveH3Cell != asset.h3CellIndex) {
+                revert SpatialLockFailed(liveH3Cell, asset.h3CellIndex);
+            }
+        } else if (claimAssetHash != assetId) {
+            // Parallax proves the claimant is standing in front of something real. Only the
+            // serial plate proves it is *their* machine.
+            revert SerialPlateMismatch(claimAssetHash, assetId);
         }
 
         UserReserve storage reserve = reserves[msg.sender];

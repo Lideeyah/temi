@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   Landmark,
   Radar,
+  ScanLine,
   ShieldCheck,
 } from 'lucide-react';
 import { decodeEventLog, type Address, type Hex, type WalletClient } from 'viem';
@@ -29,6 +30,14 @@ import {
 } from '@/lib/SpatialSweepEngine';
 import { verifySpatialLock, cellIndexToH3, SpatialLockError } from '@/lib/H3SpatialLock';
 import {
+  SERIAL_RETICLE,
+  SerialPlateError,
+  captureSerialCrop,
+  preloadOcr,
+  readSerialPlate,
+  type SerialMatch,
+} from '@/lib/SerialPlateReader';
+import {
   formatTctc,
   formatTctcExact,
   formatNgn,
@@ -45,6 +54,7 @@ type Phase =
   | 'arming'
   | 'sweeping'
   | 'analysing'
+  | 'reading'
   | 'spatial'
   | 'signing'
   | 'settled'
@@ -64,6 +74,11 @@ export interface SpatialSweepModalProps {
   account: Address | null;
   onSettled: () => void;
 }
+
+/** Full-resolution plate crops are taken around the sweep midpoint, in milliseconds. */
+const SERIAL_CROP_POINTS_MS = [1200, 1500, 1800] as const;
+
+const ZERO_HASH = `0x${'0'.repeat(64)}` as Hex;
 
 /** Masked destination for the simulated off-ramp receipt. */
 const OFFRAMP_ACCOUNT = 'OPay (903****120)';
@@ -90,6 +105,8 @@ export function SpatialSweepModal({
   const [spatialNote, setSpatialNote] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<SettlementReceipt | null>(null);
   const [lossInput, setLossInput] = useState('');
+  const [serialMatch, setSerialMatch] = useState<SerialMatch | null>(null);
+  const serialCropsRef = useRef<HTMLCanvasElement[]>([]);
 
   const liveSigma = computeJitterSigma(samples);
   const isProperty = asset?.category === 1;
@@ -128,12 +145,20 @@ export function SpatialSweepModal({
     setSpatialNote(null);
     setReceipt(null);
     setLossInput('');
+    setSerialMatch(null);
+    serialCropsRef.current = [];
   }, [stopCamera]);
 
   useEffect(() => {
     if (!open) reset();
     return () => stopCamera();
   }, [open, reset, stopCamera]);
+
+  // Tesseract takes a second or two to start. Warm it while the brief is on screen so the
+  // sweep itself never pays that cost.
+  useEffect(() => {
+    if (open && asset?.category === 0) preloadOcr();
+  }, [open, asset?.category]);
 
   const fail = useCallback((code: string, title: string, detail?: string) => {
     setErrorCode(code);
@@ -206,7 +231,21 @@ export function SpatialSweepModal({
       result = await runSpatialSweep({
         video,
         signal: controller.signal,
-        onProgress: (p) => setProgress(p.progress),
+        onProgress: (p) => {
+          setProgress(p.progress);
+          // Grab full-resolution plate crops around the midpoint. Three of them, because a
+          // single frame mid-sweep is frequently motion-blurred past legibility.
+          if (!isProperty && serialCropsRef.current.length < SERIAL_CROP_POINTS_MS.length) {
+            const next = SERIAL_CROP_POINTS_MS[serialCropsRef.current.length];
+            if (p.elapsedMs >= next) {
+              try {
+                serialCropsRef.current.push(captureSerialCrop(video));
+              } catch {
+                // A dropped crop is survivable — the others still have to read.
+              }
+            }
+          }
+        },
         onSample: (sample) => setSamples((prev) => [...prev, sample]),
       });
     } catch (cause) {
@@ -221,7 +260,23 @@ export function SpatialSweepModal({
     setPhase('analysing');
     stopCamera();
 
-    // 4. Fixed property carries an additional spatial lock.
+    // 4. Movable hardware must show its serial plate. Parallax proves the claimant is in front
+    //    of something real; only the plate proves it is the machine they registered.
+    let claimAssetHash: Hex = ZERO_HASH;
+    if (!isProperty) {
+      setPhase('reading');
+      try {
+        const match = await readSerialPlate(serialCropsRef.current, asset.assetId);
+        setSerialMatch(match);
+        claimAssetHash = match.hash;
+      } catch (cause) {
+        const serialError = cause as SerialPlateError;
+        fail(serialError.code, serialError.message, serialError.detail);
+        return;
+      }
+    }
+
+    // 5. Fixed property carries an additional spatial lock.
     let liveH3Cell = 0n;
     if (isProperty) {
       setPhase('spatial');
@@ -244,7 +299,7 @@ export function SpatialSweepModal({
       }
     }
 
-    // 5. Settle on Creditcoin.
+    // 6. Settle on Creditcoin.
     setPhase('signing');
     try {
       const hash = await walletClient.writeContract({
@@ -257,6 +312,7 @@ export function SpatialSweepModal({
           BigInt(result.jitterVariance),
           BigInt(result.parallaxScore),
           liveH3Cell,
+          claimAssetHash,
         ],
         account,
         chain: creditcoinTestnet,
@@ -392,6 +448,14 @@ export function SpatialSweepModal({
             </div>
           </div>
 
+          {!isProperty ? (
+            <Notice tone="ochre" title="Keep the serial plate in the inner box" icon={<ScanLine size={12} />}>
+              Sweep across the damage <em>and</em> hold the machine&apos;s serial plate inside the
+              amber box. Tèmi reads it on-device and checks it against the plate you registered,
+              so a claim can only be filed against the machine it belongs to.
+            </Notice>
+          ) : null}
+
           {isProperty ? (
             <Notice tone="steel" title="Spatial lock required" icon={<Landmark size={12} />}>
               This shop is bound to H3 cell{' '}
@@ -411,7 +475,12 @@ export function SpatialSweepModal({
       ) : null}
 
       {/* ---------------- live sweep ---------------- */}
-      {phase === 'arming' || phase === 'sweeping' || phase === 'analysing' || phase === 'spatial' || phase === 'signing' ? (
+      {phase === 'arming' ||
+      phase === 'sweeping' ||
+      phase === 'analysing' ||
+      phase === 'reading' ||
+      phase === 'spatial' ||
+      phase === 'signing' ? (
         <div className="space-y-3">
           <div className="relative overflow-hidden rounded-[3px] border border-hairline bg-ink">
             <video
@@ -429,10 +498,40 @@ export function SpatialSweepModal({
                 fill="none" stroke="rgba(255,255,255,0.5)" strokeWidth="1"
                 strokeDasharray="4 6" className="reticle-pulse"
               />
+              {/* Movable hardware must show its plate. The inner box is exactly the region the
+                  OCR pass crops, so what the merchant frames is what the reader sees. */}
+              {!isProperty ? (
+                <>
+                  <rect
+                    x={`${SERIAL_RETICLE.x * 100}%`}
+                    y={`${SERIAL_RETICLE.y * 100}%`}
+                    width={`${SERIAL_RETICLE.width * 100}%`}
+                    height={`${SERIAL_RETICLE.height * 100}%`}
+                    fill="none"
+                    stroke="#8C733E"
+                    strokeWidth="1.5"
+                  />
+                  <text
+                    x="50%"
+                    y={`${(SERIAL_RETICLE.y - 0.025) * 100}%`}
+                    textAnchor="middle"
+                    fill="#E4CF9B"
+                    style={{ fontSize: 9, letterSpacing: '0.12em', fontFamily: 'ui-monospace, monospace' }}
+                  >
+                    ALIGN SERIAL PLATE HERE
+                  </text>
+                </>
+              ) : null}
             </svg>
             <div className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-[rgba(31,36,47,0.72)] px-3 py-1.5">
               <span className="tabular text-[10px] uppercase tracking-[0.1em] text-white/85">
-                {phase === 'sweeping' ? 'Sweeping' : phase === 'arming' ? 'Arming sensors' : 'Analysing'}
+                {phase === 'sweeping'
+                  ? 'Sweeping'
+                  : phase === 'arming'
+                    ? 'Arming sensors'
+                    : phase === 'reading'
+                      ? 'Reading plate'
+                      : 'Analysing'}
               </span>
               <span className="tabular text-[10px] text-white/85">
                 {((progress * SWEEP_DURATION_MS) / 1000).toFixed(1)}s / 3.0s
@@ -453,6 +552,12 @@ export function SpatialSweepModal({
             belowThreshold={samples.length > 20 && liveSigma < MIN_JITTER_SIGMA}
           />
 
+          {phase === 'reading' ? (
+            <Notice tone="ochre" title="Reading the serial plate on-device" icon={<ScanLine size={12} />}>
+              Matching the plate in frame against the serial this asset was registered with. The
+              image never leaves your phone.
+            </Notice>
+          ) : null}
           {phase === 'spatial' ? (
             <Notice tone="steel" title="Sampling GPS for the spatial lock" icon={<Radar size={12} />}>
               Resolving your position to an H3 resolution-10 cell.
@@ -533,6 +638,9 @@ export function SpatialSweepModal({
                 <MetricRow label="Tremor σ" value={telemetry.jitterSigma.toFixed(4)} tone="moss" />
                 <MetricRow label="Parallax" value={`${telemetry.parallaxScore} / 1000`} tone="moss" />
               </>
+            ) : null}
+            {serialMatch ? (
+              <MetricRow label="Serial verified" value={serialMatch.serial} tone="ochre" />
             ) : null}
             {spatialNote ? <MetricRow label="Spatial lock" value={spatialNote} tone="steel" /> : null}
           </div>

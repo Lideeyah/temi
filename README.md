@@ -92,6 +92,14 @@ Measured on synthetic scenes with known ground truth (`npm test`), against the c
 | Video replayed on a screen | 0.005 px | **260** | `ERR_PARALLAX_REJECTED` |
 | Static camera | — | **9** | `ERR_PARALLAX_REJECTED` |
 
+**Serial plate.** Movable machinery carries a third gate: the sweep must read the machine's
+serial plate, and `settleClaim` requires `keccak256(serial) == assetId`. Parallax proves the
+claimant is in front of something real; only the plate proves it is theirs. OCR runs on-device
+against a full-resolution crop of the viewfinder's inner box, and because we only need *some*
+token in the output to hash to the registered id, plate noise is free — with a nearest-first
+expansion over O/0, I/1, S/5 shape confusions to absorb misreads without ever loosening the
+equality check.
+
 **Spatial lock.** Commercial property carries a third gate: live GPS must resolve to the same
 Uber H3 resolution-10 hexagon (~66 m²) the shop was registered in, with a fix no worse than
 ±100 m. Only the hexagon is written on-chain — the raw coordinate never leaves the device, which
@@ -145,6 +153,11 @@ deployer at <https://faucet.creditcoin.org> first.
 
 `npm test` runs against live infrastructure, not fixtures:
 
+- `tests/vault.test.mjs` — executes the compiled `TemiVault` bytecode in a local EVM: real
+  storage, real reverts, real value transfers. Covers the 85/15 split, global asset identity,
+  both attestation gates, the serial-plate gate, the spatial lock, unencumbered withdrawal,
+  write-once portal configuration, vault solvency, and the multi-asset drain attack.
+- `tests/serial.test.mjs` — the serial matcher against real OCR failure modes.
 - `tests/parallax.test.mjs` — the parallax discriminator and tremor gate on synthetic scenes.
 - `tests/attestcoin.test.mjs` — pulls a real attested Sepolia transaction, fetches a real proof,
   checks `EvmTxDecoder`'s chunk layout against Sepolia RPC ground truth, round-trips
@@ -174,6 +187,7 @@ contracts/
 lib/
   SpatialSweepEngine.ts    IMU tremor + motion-parallax computer vision, all on-device
   H3SpatialLock.ts         high-accuracy GPS → H3 res-10 cell
+  SerialPlateReader.ts     on-device OCR + hash-matching of the serial plate
   AttestcoinConduit.ts     proof-builder client + ABI packing
 components/
   landing/                 public landing page: value equation + live telemetry strip

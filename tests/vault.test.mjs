@@ -23,6 +23,7 @@ const OTHER = '0x4444444444444444444444444444444444444444';
 
 // Telemetry that clears both on-chain gates.
 const GOOD = { jitter: 2757n, parallax: 901n };
+const ZERO = `0x${'0'.repeat(64)}`;
 
 const chain = await createChain();
 for (const who of [TREASURY, MERCHANT, ATTACKER, OTHER]) await chain.fund(who, E('10000'));
@@ -52,22 +53,39 @@ check('fixed property requires an H3 cell', !noCell.ok, noCell.revert);
 
 /* ---------------------------------------------------------------- */
 console.log('\n[3] Attestation gates are enforced on-chain, not just in the client');
-const weakTremor = await chain.call(vault, 'settleClaim', [gen, E('1'), 99n, GOOD.parallax, 0n], { from: MERCHANT });
+const weakTremor = await chain.call(vault, 'settleClaim', [gen, E('1'), 99n, GOOD.parallax, 0n, gen], { from: MERCHANT });
 check('tremor below 100 reverts', !weakTremor.ok, weakTremor.revert);
-const weakParallax = await chain.call(vault, 'settleClaim', [gen, E('1'), GOOD.jitter, 849n, 0n], { from: MERCHANT });
+const weakParallax = await chain.call(vault, 'settleClaim', [gen, E('1'), GOOD.jitter, 849n, 0n, gen], { from: MERCHANT });
 check('parallax below 850 reverts', !weakParallax.ok, weakParallax.revert);
-const notOwner = await chain.call(vault, 'settleClaim', [gen, E('1'), GOOD.jitter, GOOD.parallax, 0n], { from: ATTACKER });
+const notOwner = await chain.call(vault, 'settleClaim', [gen, E('1'), GOOD.jitter, GOOD.parallax, 0n, gen], { from: ATTACKER });
 check('non-owner cannot claim', !notOwner.ok, notOwner.revert);
-const overDeclared = await chain.call(vault, 'settleClaim', [gen, E('6'), GOOD.jitter, GOOD.parallax, 0n], { from: MERCHANT });
+const overDeclared = await chain.call(vault, 'settleClaim', [gen, E('6'), GOOD.jitter, GOOD.parallax, 0n, gen], { from: MERCHANT });
 check('claim above declared value reverts', !overDeclared.ok, overDeclared.revert);
+
+/* ---------------------------------------------------------------- */
+console.log('\n[3b] Serial plate binds a claim to the registered machine');
+const wrongPlate = await chain.call(
+  vault, 'settleClaim',
+  [gen, E('1'), GOOD.jitter, GOOD.parallax, 0n, assetId('SOME-OTHER-LAWNMOWER')],
+  { from: MERCHANT },
+);
+check('scanning a different machine reverts', !wrongPlate.ok, wrongPlate.revert);
+const noPlate = await chain.call(
+  vault, 'settleClaim', [gen, E('1'), GOOD.jitter, GOOD.parallax, 0n, ZERO], { from: MERCHANT },
+);
+check('omitting the plate hash reverts', !noPlate.ok, noPlate.revert);
+const rightPlate = await chain.call(
+  vault, 'settleClaim', [gen, E('1'), GOOD.jitter, GOOD.parallax, 0n, gen], { from: MERCHANT },
+);
+check('matching plate settles', rightPlate.ok, rightPlate.ok ? fmt(rightPlate.value) : rightPlate.revert);
 
 /* ---------------------------------------------------------------- */
 console.log('\n[4] Spatial lock for fixed property');
 const shop = assetId('h3+meter');
 await chain.call(vault, 'registerAsset', [shop, 1, E('5'), 622234000000000000n], { from: MERCHANT });
-const wrongCell = await chain.call(vault, 'settleClaim', [shop, E('1'), GOOD.jitter, GOOD.parallax, 622234000000000001n], { from: MERCHANT });
+const wrongCell = await chain.call(vault, 'settleClaim', [shop, E('1'), GOOD.jitter, GOOD.parallax, 622234000000000001n, ZERO], { from: MERCHANT });
 check('wrong H3 cell reverts', !wrongCell.ok, wrongCell.revert);
-const rightCell = await chain.call(vault, 'settleClaim', [shop, E('1'), GOOD.jitter, GOOD.parallax, 622234000000000000n], { from: MERCHANT });
+const rightCell = await chain.call(vault, 'settleClaim', [shop, E('1'), GOOD.jitter, GOOD.parallax, 622234000000000000n, ZERO], { from: MERCHANT });
 check('matching H3 cell settles', rightCell.ok, rightCell.ok ? fmt(rightCell.value) : rightCell.revert);
 
 /* ---------------------------------------------------------------- */
@@ -100,7 +118,7 @@ let reverted = 0;
 for (let i = 0; i < 10; i++) {
   const id = assetId(`fake-asset-${i}`);
   await chain.call(vault, 'registerAsset', [id, 0, E('50'), 0n], { from: ATTACKER });
-  const r = await chain.call(vault, 'settleClaim', [id, E('50'), GOOD.jitter, GOOD.parallax, 0n], { from: ATTACKER });
+  const r = await chain.call(vault, 'settleClaim', [id, E('50'), GOOD.jitter, GOOD.parallax, 0n, id], { from: ATTACKER });
   if (r.ok) settled++;
   else reverted++;
 }
@@ -120,6 +138,21 @@ check('pool retains most of its value', poolAfter > (poolBefore * 90n) / 100n, `
 
 const headroom = (await chain.call(vault, 'quoteTier2Headroom', [ATTACKER], { from: TREASURY })).value;
 check('headroom reports zero once exhausted', headroom === 0n, fmt(headroom));
+
+/* ---------------------------------------------------------------- */
+console.log('\n[6b] Trusted source portal is write-once');
+const PORTAL = '0x00000000000000000000000000000000000000aa';
+const ROGUE = '0x00000000000000000000000000000000000000bb';
+const notTreasury = await chain.call(vault, 'setTrustedSourcePortal', [1n, PORTAL], { from: ATTACKER });
+check('only the treasury may configure', !notTreasury.ok, notTreasury.revert);
+const zeroPortal = await chain.call(vault, 'setTrustedSourcePortal', [1n, `0x${'0'.repeat(40)}`], { from: TREASURY });
+check('zero address rejected', !zeroPortal.ok, zeroPortal.revert);
+check('first configuration succeeds', (await chain.call(vault, 'setTrustedSourcePortal', [1n, PORTAL], { from: TREASURY })).ok);
+const repoint = await chain.call(vault, 'setTrustedSourcePortal', [1n, ROGUE], { from: TREASURY });
+check('a compromised treasury cannot repoint it', !repoint.ok, repoint.revert);
+const stored = (await chain.call(vault, 'trustedSourcePortal', [1n], { from: TREASURY })).value;
+check('portal unchanged', stored.toLowerCase() === PORTAL, stored);
+check('a different chain key is still configurable', (await chain.call(vault, 'setTrustedSourcePortal', [3n, PORTAL], { from: TREASURY })).ok);
 
 /* ---------------------------------------------------------------- */
 console.log('\n[7] Vault stays solvent');

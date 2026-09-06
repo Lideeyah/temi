@@ -318,6 +318,37 @@ reject if parallaxScore < 850                       ERR_PARALLAX_REJECTED`}</Cod
                 registered twice.
               </P>
               <P>
+                The plate is also checked <em>at claim time</em>, and this is what stops a
+                merchant registering an expensive generator and later sweeping a broken
+                lawnmower. The viewfinder carries an inner box; whatever sits inside it is
+                cropped at full resolution three times around the sweep midpoint, binarised, and
+                read by an OCR pass running entirely on the device. The resulting hash is passed
+                to <Mono>settleClaim</Mono>, which requires it to equal the assetId for movable
+                hardware.
+              </P>
+              <Claim>
+                Parallax proves the claimant is standing in front of something real. Only the
+                serial plate proves it is theirs.
+              </Claim>
+              <P>
+                Hash equality is unforgiving, and OCR of a stamped plate through a moving phone
+                camera is not reliable enough to survive it naively — so the matcher is built
+                around two observations. We never need to know the serial: it is enough to find{' '}
+                <em>some</em> token in the OCR output whose hash equals the assetId, so every
+                word on the plate is tokenised and tested and only one has to come through clean.
+                And OCR errors on alphanumerics are overwhelmingly a small set of shape
+                confusions — O/0, I/1/L, S/5, B/8, Z/2, G/6 — so each candidate is expanded
+                across those substitutions, nearest-first. A clean read never pays for the
+                variant search; a three-character misread still recovers. Adjacent words are
+                joined up to five deep, because die-stamped runs are routinely split on every
+                gap.
+              </P>
+              <P>
+                None of this loosens the equality check. The search is over candidate readings,
+                and the test each candidate must pass is still an exact keccak256 match against
+                what was registered.
+              </P>
+              <P>
                 Fixed property cannot use a plate, so it is bound to two things that are hard to
                 move: its position and its electricity supply.
               </P>
@@ -444,9 +475,19 @@ TemiSourcePortal
                     'Yes — two orders of magnitude of separation.',
                   ],
                   [
+                    'Sweeping a different machine than the one registered',
+                    'The claim sweep must read the serial plate; settleClaim requires keccak256(serial) == assetId for movable hardware.',
+                    'Yes — bytecode test: a mismatched or omitted plate hash reverts with SerialPlateMismatch.',
+                  ],
+                  [
                     'Claiming a shop you are not at',
                     'Live H3 cell must equal the registered cell, checked on-chain.',
                     'By construction.',
+                  ],
+                  [
+                    'Compromised treasury repointing the source portal',
+                    'setTrustedSourcePortal is write-once per chain key. There is no legitimate reason to change where a chain’s attested deposits originate.',
+                    'Yes — bytecode test: a second write reverts with PortalAlreadyConfigured.',
                   ],
                   [
                     'Registering someone else’s asset',
@@ -510,11 +551,13 @@ TemiSourcePortal
               <H3>A physical diorama defeats the parallax gate</H3>
               <P>
                 The gate proves depth structure, not damage. An attacker who builds a real
-                three-dimensional scene — a damaged generator that is not theirs, or a staged
-                one — passes honestly, because the scene genuinely has depth. Tèmi verifies that
-                the claimant is physically present at something real, not that the thing is the
-                registered asset. For fixed property the spatial lock narrows this considerably;
-                for movable machinery it does not.
+                three-dimensional scene passes honestly, because the scene genuinely has depth.
+                Both tracks now narrow this: fixed property by the spatial lock, movable hardware
+                by the serial-plate check, which requires the registered machine to be physically
+                in frame. What remains is that neither proves the machine is <em>damaged</em> —
+                a merchant can sweep their own working generator, with its own plate, and claim.
+                Damage assessment from a three-second handheld sweep is a genuinely open problem
+                and we do not claim to have solved it; the invariant is what bounds the cost.
               </P>
 
               <H3>Thresholds are calibrated on synthetic scenes</H3>
@@ -527,6 +570,17 @@ TemiSourcePortal
                 rejection rate on low-end hardware to be the binding practical problem. Note also
                 that the σ ≥ 0.01 tremor floor is close to the resting noise floor of some
                 accelerometers, which makes it a weak gate on those devices.
+              </P>
+
+              <H3>OCR will refuse some honest claims</H3>
+              <P>
+                The serial gate can only fail closed: if no candidate reading hashes to the
+                assetId, the claim is refused. A corroded, painted-over or unlit plate, or one
+                the merchant cannot physically get into frame alongside the damage, will block a
+                legitimate claim. The tokenisation and confusion search widen the funnel
+                substantially but cannot fix an illegible plate. A production system needs a
+                fallback — most likely an attested photo escalating to human review — and it does
+                not have one today.
               </P>
 
               <H3>Cell-boundary false negatives</H3>
@@ -584,10 +638,12 @@ TemiSourcePortal
                   ['Parallax floor', '850 / 1000', 'MIN_PARALLAX_SCORE = 850'],
                   ['Coplanarity rejection', '< 0.35 px spread', 'client, isCoplanar()'],
                   ['Sweep duration', '3.0 s, 3 keyframes', 'client'],
+                  ['Serial plate match', 'keccak256(serial) == assetId', 'on-chain, movable only'],
+                  ['OCR crop points', 't = 1.2, 1.5, 1.8 s', 'client, full resolution'],
                   ['GPS accuracy ceiling', '≤ 100 m', 'client, at registration'],
                   ['Spatial resolution', 'H3 res 10 (~66 m²)', 'on-chain exact match'],
                   ['Settlement chain', `cc3-testnet ${creditcoinTestnet.id}`, '—'],
-                  ['Attestcoin source chain', 'Ethereum Sepolia, key 1', 'trustedSourcePortal'],
+                  ['Attestcoin source chain', 'Ethereum Sepolia, key 1', 'trustedSourcePortal, write-once'],
                   ['Verify precompile', ATTESTCOIN_VERIFIER_ADDRESS, '0x0FD2'],
                 ]}
               />
