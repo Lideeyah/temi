@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import {
   ArrowRight,
   Ban,
@@ -86,12 +87,12 @@ function Hero() {
 
           <div className="mt-8 flex flex-wrap items-center gap-2.5">
             <LaunchLink />
-            <a
-              href="#how"
+            <Link
+              href="/whitepaper"
               className="focus-ring inline-flex items-center justify-center gap-2 rounded-[3px] border border-hairline-strong px-5 py-3 text-[13px] font-medium text-ink transition-colors hover:bg-[rgba(31,36,47,0.04)]"
             >
               Read whitepaper &amp; ASC audit
-            </a>
+            </Link>
           </div>
 
           <div className="mt-8 flex flex-wrap gap-x-6 gap-y-2.5 border-t border-hairline pt-5">
@@ -304,6 +305,9 @@ function Footer() {
       <div className="mx-auto flex w-full max-w-[1180px] flex-wrap items-center gap-x-6 gap-y-2 px-5 py-6 sm:px-8">
         <span className="text-[15px] font-semibold tracking-[-0.03em] text-ink">Tèmi</span>
         <span className="text-[11px] text-slate-soft">“Mine” — Yorùbá</span>
+        <Link href="/whitepaper" className="focus-ring text-[11.5px] text-ink underline underline-offset-2">
+          Whitepaper &amp; ASC audit
+        </Link>
         <span className="tabular ml-auto text-[10.5px] text-slate-soft">
           Creditcoin cc3-testnet · Attestcoin chain key 1 · Ethereum Sepolia
         </span>
