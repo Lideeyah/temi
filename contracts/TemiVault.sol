@@ -50,6 +50,13 @@ contract TemiVault {
         uint256 tier1PersonalBalance;
         uint256 lifetimeDeposits;
         uint256 lastDepositTimestamp;
+        /// @notice Cumulative tCTC this operator has ever drawn from the mutual buffer.
+        /// @dev    The 3x cap has to be evaluated against this running total, not per claim.
+        ///         Evaluated per claim it does not compose: an operator could register many
+        ///         assets and collect 3x lifetime deposits on each one, because settlement
+        ///         only deactivates the asset it settled. Tracking the draw makes the cap
+        ///         a true lifetime bound.
+        uint256 lifetimeTier2Drawn;
     }
 
     /* ------------------------------------------------------------------ */
@@ -490,13 +497,17 @@ contract TemiVault {
             : reserve.tier1PersonalBalance;
         uint256 remainingLoss = claimedLoss - tier1Draw;
 
-        // The mutual buffer covers the excess, bounded by both a pool-solvency cap and an
-        // anti-drain cap tied to what this operator has actually contributed.
+        // The mutual buffer covers the excess, bounded by a pool-solvency cap and by a
+        // lifetime anti-drain allowance tied to what this operator has actually contributed.
         uint256 poolCap = (totalTier2PoolBalance * TIER2_DRAW_CAP_BPS) / BPS_DENOMINATOR;
         uint256 lifetimeCap = reserve.lifetimeDeposits * LIFETIME_DEPOSIT_MULTIPLE;
+        uint256 allowance = lifetimeCap > reserve.lifetimeTier2Drawn
+            ? lifetimeCap - reserve.lifetimeTier2Drawn
+            : 0;
+
         uint256 tier2Draw = remainingLoss;
         if (tier2Draw > poolCap) tier2Draw = poolCap;
-        if (tier2Draw > lifetimeCap) tier2Draw = lifetimeCap;
+        if (tier2Draw > allowance) tier2Draw = allowance;
         if (tier2Draw > totalTier2PoolBalance) tier2Draw = totalTier2PoolBalance;
 
         payout = tier1Draw + tier2Draw;
@@ -504,6 +515,7 @@ contract TemiVault {
 
         // Effects before interaction.
         reserve.tier1PersonalBalance -= tier1Draw;
+        reserve.lifetimeTier2Drawn += tier2Draw;
         totalTier1Balance -= tier1Draw;
         totalTier2PoolBalance -= tier2Draw;
         totalClaimsSettled += 1;
@@ -595,11 +607,17 @@ contract TemiVault {
         return reserves[operator];
     }
 
-    /// @notice The maximum a given operator could draw from the mutual buffer right now.
+    /// @notice The maximum a given operator could draw from the mutual buffer right now,
+    ///         net of everything they have already drawn.
     function quoteTier2Headroom(address operator) external view returns (uint256) {
+        UserReserve storage reserve = reserves[operator];
         uint256 poolCap = (totalTier2PoolBalance * TIER2_DRAW_CAP_BPS) / BPS_DENOMINATOR;
-        uint256 lifetimeCap = reserves[operator].lifetimeDeposits * LIFETIME_DEPOSIT_MULTIPLE;
-        uint256 cap = poolCap < lifetimeCap ? poolCap : lifetimeCap;
+        uint256 lifetimeCap = reserve.lifetimeDeposits * LIFETIME_DEPOSIT_MULTIPLE;
+        uint256 allowance = lifetimeCap > reserve.lifetimeTier2Drawn
+            ? lifetimeCap - reserve.lifetimeTier2Drawn
+            : 0;
+
+        uint256 cap = poolCap < allowance ? poolCap : allowance;
         return cap < totalTier2PoolBalance ? cap : totalTier2PoolBalance;
     }
 

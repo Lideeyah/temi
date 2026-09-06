@@ -159,11 +159,14 @@ totalTier2PoolBalance                   += tier2Amount`}</Code>
               <Code label="TemiVault.settleClaim">{`tier1Draw     = min(claimedLoss, tier1PersonalBalance)
 remainingLoss = claimedLoss - tier1Draw
 
-poolCap       = 10% × totalTier2PoolBalance      // pool solvency
-lifetimeCap   = 3  × lifetimeDeposits            // anti-drain
+poolCap       = 10% × totalTier2PoolBalance          // pool solvency
+lifetimeCap   = 3  × lifetimeDeposits                // anti-drain
+allowance     = lifetimeCap - lifetimeTier2Drawn     // what is LEFT of that cap
 
-tier2Draw     = min(remainingLoss, poolCap, lifetimeCap, totalTier2PoolBalance)
-payout        = tier1Draw + tier2Draw`}</Code>
+tier2Draw     = min(remainingLoss, poolCap, allowance, totalTier2PoolBalance)
+payout        = tier1Draw + tier2Draw
+
+lifetimeTier2Drawn += tier2Draw                      // the cap has to accumulate`}</Code>
               <P>
                 The pool cap bounds the damage any single claim can do to everyone else: no one
                 event can remove more than a tenth of the buffer, so a cluster of correlated
@@ -176,6 +179,17 @@ payout        = tier1Draw + tier2Draw`}</Code>
                 strategy of joining to extract is capped at 3× and requires capital up front. It
                 also means the buffer&apos;s exposure to any member scales with that
                 member&apos;s participation, which is the property that makes a mutual work.
+              </P>
+              <P>
+                The cap is evaluated against a running total, <Mono>lifetimeTier2Drawn</Mono>,
+                and not per claim. This matters more than it looks. Our first implementation
+                applied the 3× bound to each settlement independently, and because settlement
+                only deactivates the asset it settled, an operator could register any number of
+                assets and collect the full allowance on every one. Simulated against a
+                ₦40,000,000 buffer, a ₦250,000 deposit extracted 155× and left the pool at three
+                per cent. The bound did not compose. It does now, and the regression test drives
+                the real bytecode: nine of ten fraudulent claims revert once the allowance is
+                spent.
               </P>
               <H3>Worked example</H3>
               <P>
@@ -440,9 +454,9 @@ TemiSourcePortal
                     'By construction.',
                   ],
                   [
-                    'Draining the mutual buffer',
-                    'Per-claim caps at 10% of pool and 3× lifetime deposits; the asset is deactivated on settlement.',
-                    'By construction.',
+                    'Draining the mutual buffer across many assets',
+                    'The 3× bound accumulates in lifetimeTier2Drawn, so it holds across every claim an operator ever files, not just each one individually.',
+                    'Yes — found in our own review, where the per-claim form allowed 155× extraction. Now covered by a bytecode-level regression test.',
                   ],
                   [
                     'Reentrancy on payout',
@@ -483,11 +497,14 @@ TemiSourcePortal
                 A claimant who patches the client can submit <Mono>jitterVariance</Mono> and{' '}
                 <Mono>parallaxScore</Mono> above the thresholds without ever pointing a camera at
                 anything. Nothing in the current design prevents this, because nothing signs the
-                sensor stream. The economic bound is the invariant: the payout is capped at 3×
-                what the attacker deposited, so the attack costs real capital and returns a
-                bounded multiple of it. Closing this properly needs hardware attestation of the
-                sensor pipeline — Android Play Integrity or iOS App Attest — signing the telemetry
-                before it reaches the chain. That is the single most valuable thing to build next.
+                sensor stream. The only real defence today is economic: the cumulative invariant
+                caps total extraction at 3× what the attacker deposited, so forging telemetry
+                costs real capital and returns a bounded multiple of it. That bound is now
+                enforced across an operator&apos;s whole history rather than per claim — which
+                is exactly the correction that makes the economic argument hold at all. Closing
+                the gap properly needs hardware attestation of the sensor pipeline — Android Play
+                Integrity or iOS App Attest — signing the telemetry before it reaches the chain.
+                That is the single most valuable thing to build next.
               </P>
 
               <H3>A physical diorama defeats the parallax gate</H3>

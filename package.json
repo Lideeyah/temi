@@ -8,7 +8,7 @@
     "start": "next start",
     "compile": "node scripts/compile.mjs && node scripts/gen-abi.mjs",
     "deploy": "node scripts/deploy.mjs",
-    "test": "node --experimental-strip-types --import ./tests/ts-resolve.mjs tests/parallax.test.mjs && node --experimental-strip-types --import ./tests/ts-resolve.mjs tests/attestcoin.test.mjs"
+    "test": "node tests/vault.test.mjs && node --experimental-strip-types --import ./tests/ts-resolve.mjs tests/parallax.test.mjs && node --experimental-strip-types --import ./tests/ts-resolve.mjs tests/attestcoin.test.mjs"
   },
   "dependencies": {
     "canvas-confetti": "^1.9.4",
@@ -23,6 +23,10 @@
     "viem": "^2.56.3"
   },
   "devDependencies": {
+    "@ethereumjs/common": "^4.4.0",
+    "@ethereumjs/evm": "^3.1.1",
+    "@ethereumjs/statemanager": "^2.4.0",
+    "@ethereumjs/util": "^9.1.0",
     "@tailwindcss/postcss": "^4",
     "@types/canvas-confetti": "^1.9.0",
     "@types/node": "^20",
