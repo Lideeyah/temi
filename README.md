@@ -121,8 +121,18 @@ expansion over O/0, I/1, S/5 shape confusions to absorb misreads without ever lo
 equality check.
 
 **Spatial lock.** Commercial property carries a third gate: live GPS must resolve to the same
-Uber H3 resolution-10 hexagon (~66 m²) the shop was registered in, with a fix no worse than
-±100 m. Only the hexagon is written on-chain — the raw coordinate never leaves the device, which
+Uber H3 resolution-10 hexagon the shop was registered in, with a fix no worse than ±100 m.
+
+A res-10 cell is ~12,300 m², about 150 m across — not the 66 m² an earlier draft claimed, which
+mistook the average *edge length in metres* for an area. The coarseness is still correct: consumer
+GPS drifts by tens of metres, and a cell tight enough to isolate one stall (res 12, ~22 m across)
+would be smaller than the error bar. The lock proves presence *at the premises*; the DisCo meter
+number bound into the asset id is what identifies the unit.
+
+Because the match is exact, a merchant near a cell edge can drift out and be refused. Rather than
+widening the accepted area — which would multiply the impersonation surface by seven — the
+boundary is made visible: a live watch reports whether you are inside, how many metres past the
+*edge* you are, and which way to walk, and the sweep is held until you are back in. Only the hexagon is written on-chain — the raw coordinate never leaves the device, which
 is enough to prove someone is standing at their own stall and not enough to track them.
 
 ---
@@ -205,6 +215,8 @@ deployer at <https://faucet.creditcoin.org> first.
 - `tests/oracle.test.mjs` — the live-valuation path against the real bytecode, with a stub
   verifier standing in at `0x0FD2`: the indexed-topic decode checked against a genuine Sepolia
   log, 8→18 decimal scaling, monotonic rounds, the staleness backstop, and conversion.
+- `tests/proximity.test.mjs` — spatial guidance geometry against real Lagos H3 cells, including
+  the assertion that pins a res-10 cell at ~12,300 m².
 - `tests/serial.test.mjs` — the serial matcher against real OCR failure modes.
 - `tests/parallax.test.mjs` — the parallax discriminator and tremor gate on synthetic scenes.
 - `tests/attestcoin.test.mjs` — pulls a real attested Sepolia transaction, fetches a real proof,

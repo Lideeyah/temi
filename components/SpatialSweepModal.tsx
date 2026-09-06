@@ -29,7 +29,12 @@ import {
   type AccelSample,
   type SweepTelemetry,
 } from '@/lib/SpatialSweepEngine';
-import { verifySpatialLock, cellIndexToH3, SpatialLockError } from '@/lib/H3SpatialLock';
+import {
+  verifySpatialLock,
+  cellIndexToH3,
+  MAX_GPS_ACCURACY_METERS,
+  SpatialLockError,
+} from '@/lib/H3SpatialLock';
 import {
   SERIAL_RETICLE,
   SerialPlateError,
@@ -48,6 +53,7 @@ import {
 } from '@/lib/format';
 import type { VaultAsset } from '@/hooks/useVault';
 import { SensorOscilloscope } from './SensorOscilloscope';
+import { SpatialProximityIndicator } from './SpatialProximityIndicator';
 import { Badge, Button, Field, MetricRow, Modal, Notice, StatusDot, TextInput } from './ui/Primitives';
 
 type Phase =
@@ -117,6 +123,10 @@ export function SpatialSweepModal({
   const serialCropsRef = useRef<HTMLCanvasElement[]>([]);
   const [quote, setQuote] = useState<ClaimQuote | null>(null);
   const [escrow, setEscrow] = useState<{ claimId: bigint; amount: bigint } | null>(null);
+  // Live guidance only. The authoritative check is a fresh sample taken after the sweep and
+  // compared on-chain — this just stops a merchant burning three seconds on a claim that
+  // cannot land.
+  const [insideCell, setInsideCell] = useState<boolean | null>(null);
 
   const liveSigma = computeJitterSigma(samples);
   const isProperty = asset?.category === 1;
@@ -191,6 +201,7 @@ export function SpatialSweepModal({
     serialCropsRef.current = [];
     setQuote(null);
     setEscrow(null);
+    setInsideCell(null);
   }, [stopCamera]);
 
   useEffect(() => {
@@ -539,19 +550,40 @@ export function SpatialSweepModal({
           ) : null}
 
           {isProperty ? (
-            <Notice tone="steel" title="Spatial lock required" icon={<Landmark size={12} />}>
-              This shop is bound to H3 cell{' '}
-              <span className="tabular">{cellIndexToH3(asset.h3CellIndex)}</span>. Your live GPS
-              must resolve to the same hexagon.
-            </Notice>
+            <div className="space-y-2">
+              <Notice tone="steel" title="Spatial lock required" icon={<Landmark size={12} />}>
+                This shop is bound to H3 cell{' '}
+                <span className="tabular">{cellIndexToH3(asset.h3CellIndex)}</span>. Your live GPS
+                must resolve to the same cell — no neighbours, no tolerance.
+              </Notice>
+              <SpatialProximityIndicator
+                boundCellIndex={asset.h3CellIndex}
+                onChange={(proximity) =>
+                  setInsideCell(
+                    proximity === null
+                      ? null
+                      : proximity.inside && proximity.accuracy <= MAX_GPS_ACCURACY_METERS,
+                  )
+                }
+              />
+            </div>
           ) : null}
 
-          <Button block onClick={() => void beginSweep()} disabled={!walletClient || !account || !lossValid}>
+          <Button
+            block
+            onClick={() => void beginSweep()}
+            disabled={!walletClient || !account || !lossValid || (isProperty && insideCell !== true)}
+          >
             <Camera size={14} strokeWidth={1.75} />
             Begin sweep
           </Button>
           {!walletClient || !account ? (
             <p className="text-center text-[11px] text-slate-soft">Connect a wallet to file a claim.</p>
+          ) : isProperty && insideCell === false ? (
+            <p className="text-center text-[11px] leading-snug text-ochre">
+              The sweep is held until you are inside the registered cell — the contract would
+              refuse the claim from here, and you would have swept for nothing.
+            </p>
           ) : null}
         </div>
       ) : null}

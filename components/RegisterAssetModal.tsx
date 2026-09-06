@@ -376,8 +376,8 @@ function PropertyTrack({
           </>
         ) : (
           <p className="mb-2.5 text-[11.5px] leading-relaxed text-slate-strong">
-            Tèmi resolves your position to a ~66 m² hexagon. A fix worse than ±{MAX_GPS_ACCURACY_METERS} m is
-            rejected, because it could not tell your stall from your neighbour&apos;s.
+            Tèmi resolves your position to a hexagonal cell about 150 m across. A fix worse than
+            ±{MAX_GPS_ACCURACY_METERS} m is rejected, because it could not reliably place you inside it.
           </p>
         )}
 

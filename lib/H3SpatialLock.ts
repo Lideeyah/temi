@@ -1,6 +1,14 @@
-import { latLngToCell, cellToLatLng, cellToBoundary, getResolution } from 'h3-js';
+import { latLngToCell, cellToLatLng, cellToBoundary, getResolution, gridDistance } from 'h3-js';
 
-/** Uber H3 resolution 10 — roughly 66 m² per hexagon, about the footprint of a market stall. */
+/**
+ * Uber H3 resolution 10 — roughly 12,300 m² per hexagon, about 150 m across.
+ *
+ * Far larger than a stall, and deliberately so. Consumer GPS on a mid-range Android in a dense
+ * market drifts by tens of metres; a cell tight enough to isolate a single stall (resolution 12
+ * is ~250 m², ~22 m across) would reject honest claims constantly. The cell proves a claimant is
+ * *at the premises*. It is the DisCo meter number, bound into the asset id alongside it, that
+ * identifies which unit.
+ */
 export const H3_RESOLUTION = 10 as const;
 
 /** A fix worse than this cannot distinguish one stall from its neighbours. */
@@ -147,4 +155,179 @@ export function cellOutline(h3Index: string): Array<[number, number]> {
 
 export function cellResolution(h3Index: string): number {
   return getResolution(h3Index);
+}
+
+
+/* ------------------------------------------------------------------ */
+/*                     LIVE PROXIMITY GUIDANCE                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Even at ~150 m across, a shop near a cell edge is a real problem: a merchant standing at the
+ * back of their own premises can drift across the boundary and be refused a legitimate claim.
+ *
+ * The tempting fix — accepting the registered cell plus its six neighbours — is the wrong one.
+ * It trades a small convenience for a sevenfold increase in the area from which somebody could
+ * impersonate a shop. The security boundary stays exactly where it is; what changes is that the
+ * merchant can now see it, and see which way to step.
+ */
+
+const EARTH_RADIUS_M = 6_371_008.8;
+const COMPASS_POINTS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'] as const;
+
+export type CompassPoint = (typeof COMPASS_POINTS)[number];
+
+export interface SpatialProximity {
+  /** True only when the live fix resolves to the exact registered cell. */
+  inside: boolean;
+  h3Index: string;
+  boundH3Index: string;
+  /** Hexagons between the live cell and the bound cell. 1 means simply over the line. */
+  gridDistance: number | null;
+  /** Metres past the registered cell's boundary. Zero when inside. */
+  metersOutside: number;
+  /** Direction to walk to get back inside. */
+  bearingDeg: number;
+  compass: CompassPoint;
+  accuracy: number;
+  latitude: number;
+  longitude: number;
+  timestamp: number;
+}
+
+export function haversineMeters(
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number },
+): number {
+  const toRad = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * toRad;
+  const dLng = (b.lng - a.lng) * toRad;
+  const lat1 = a.lat * toRad;
+  const lat2 = b.lat * toRad;
+  const h =
+    Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(h));
+}
+
+/** Initial bearing from a to b, in degrees clockwise from north. */
+export function bearingDegrees(
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number },
+): number {
+  const toRad = Math.PI / 180;
+  const lat1 = a.lat * toRad;
+  const lat2 = b.lat * toRad;
+  const dLng = (b.lng - a.lng) * toRad;
+  const y = Math.sin(dLng) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+  return (Math.atan2(y, x) * (180 / Math.PI) + 360) % 360;
+}
+
+export function compassPoint(bearing: number): CompassPoint {
+  return COMPASS_POINTS[Math.round((bearing % 360) / 45) % 8];
+}
+
+/**
+ * Shortest distance from a point to the hexagon's edge, in metres.
+ *
+ * Distance to the cell *centre* would be misleading guidance: at this resolution a merchant
+ * standing legitimately inside their own cell is still up to ~33 m from its centre. What they
+ * need to know is how far past the boundary they have strayed, which is a point-to-polygon
+ * problem, not a point-to-point one.
+ *
+ * Over a 60 m hexagon the local equirectangular projection is accurate to well under a metre,
+ * so the segment maths can be done in plain planar coordinates.
+ */
+export function metersToCellBoundary(
+  point: { lat: number; lng: number },
+  h3Index: string,
+): number {
+  const boundary = cellToBoundary(h3Index) as Array<[number, number]>;
+  const latScale = 111_320;
+  const lngScale = 111_320 * Math.cos(point.lat * (Math.PI / 180));
+
+  const project = ([lat, lng]: [number, number]) => ({
+    x: (lng - point.lng) * lngScale,
+    y: (lat - point.lat) * latScale,
+  });
+
+  let best = Infinity;
+  for (let i = 0; i < boundary.length; i++) {
+    const a = project(boundary[i]);
+    const b = project(boundary[(i + 1) % boundary.length]);
+
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const lengthSq = dx * dx + dy * dy;
+
+    // Project the origin onto the segment, clamped to its endpoints.
+    const t = lengthSq === 0 ? 0 : Math.max(0, Math.min(1, -(a.x * dx + a.y * dy) / lengthSq));
+    const cx = a.x + t * dx;
+    const cy = a.y + t * dy;
+    best = Math.min(best, Math.hypot(cx, cy));
+  }
+  return best;
+}
+
+function describeProximity(
+  position: GeolocationPosition,
+  boundCellIndex: bigint,
+): SpatialProximity {
+  const { latitude, longitude, accuracy } = position.coords;
+  const h3Index = latLngToCell(latitude, longitude, H3_RESOLUTION);
+  const boundH3Index = cellIndexToH3(boundCellIndex);
+  const inside = h3Index === boundH3Index;
+
+  const [centreLat, centreLng] = cellToLatLng(boundH3Index);
+  const here = { lat: latitude, lng: longitude };
+  const centre = { lat: centreLat, lng: centreLng };
+
+  let distance: number | null = null;
+  try {
+    distance = gridDistance(h3Index, boundH3Index);
+  } catch {
+    // h3 refuses across very large separations; the merchant is nowhere near, which is answer
+    // enough for the interface.
+    distance = null;
+  }
+
+  return {
+    inside,
+    h3Index,
+    boundH3Index,
+    gridDistance: distance,
+    metersOutside: inside ? 0 : metersToCellBoundary(here, boundH3Index),
+    bearingDeg: bearingDegrees(here, centre),
+    compass: compassPoint(bearingDegrees(here, centre)),
+    accuracy,
+    latitude,
+    longitude,
+    timestamp: position.timestamp,
+  };
+}
+
+/**
+ * Watch position and report proximity to the registered cell until the returned function is
+ * called. Purely advisory — the authoritative check is still a fresh sample taken at claim time
+ * and compared on-chain.
+ */
+export function watchSpatialProximity(
+  boundCellIndex: bigint,
+  onUpdate: (proximity: SpatialProximity) => void,
+  onError?: (error: SpatialLockError) => void,
+): () => void {
+  if (typeof navigator === 'undefined' || !navigator.geolocation) {
+    onError?.(
+      new SpatialLockError('ERR_GEOLOCATION_UNSUPPORTED', 'Geolocation unsupported'),
+    );
+    return () => undefined;
+  }
+
+  const watchId = navigator.geolocation.watchPosition(
+    (position) => onUpdate(describeProximity(position, boundCellIndex)),
+    (error) => onError?.(describeGeolocationError(error)),
+    { enableHighAccuracy: true, timeout: 20_000, maximumAge: 0 },
+  );
+
+  return () => navigator.geolocation.clearWatch(watchId);
 }

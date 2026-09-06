@@ -416,7 +416,7 @@ reject if parallaxScore < 850                       ERR_PARALLAX_REJECTED`}</Cod
                 Fixed property cannot use a plate, so it is bound to two things that are hard to
                 move: its position and its electricity supply.
               </P>
-              <Code>{`h3Index = latLngToCell(lat, lng, 10)          // ~66 m² hexagon
+              <Code>{`h3Index = latLngToCell(lat, lng, 10)          // ~12,300 m2 cell, ~150 m across
 assetId = keccak256(abi.encodePacked(h3Index, meterNumber))
 
 registration: GPS accuracy must be ≤ 100 m
@@ -432,9 +432,32 @@ claim time:   liveH3Cell == asset.h3CellIndex, enforced on-chain`}</Code>
                 — enough to prove someone is at their own stall, not enough to track them.
               </Claim>
               <P>
-                Resolution 10 is chosen deliberately. At roughly 66 m² a hexagon is about the
-                footprint of a market stall: fine enough that neighbouring traders occupy
-                different cells, coarse enough to absorb consumer GPS error.
+                Resolution 10 needs stating precisely, because it is easy to get wrong — and we
+                did, initially. A resolution-10 cell is about <Mono>12,300 m²</Mono>, roughly 150 m
+                across. The figure of 66 is the average <em>edge length in metres</em>, not an
+                area, and an earlier draft of this paper repeated it as though a cell were the
+                footprint of a single stall. It is not: a res-10 cell could hold on the order of a
+                thousand of them.
+              </P>
+              <Claim>
+                The spatial lock proves a claimant is at the premises, within about 150 m. It does
+                not prove which stall they are standing in.
+              </Claim>
+              <P>
+                That coarseness is nonetheless the right choice, for a reason unrelated to the one
+                first given. Consumer GPS in a dense market drifts by tens of metres, and the
+                registration ceiling already tolerates a ±100 m fix. A cell tight enough to isolate
+                one stall — resolution 12, at ~250 m² and ~22 m across — would be smaller than the
+                error bar on the measurement, and would refuse honest claims constantly. Precision
+                the sensor cannot support is not security.
+              </P>
+              <P>
+                What identifies the individual shop is the pairing: the asset id is{' '}
+                <Mono>keccak256(h3Index, meterNumber)</Mono>, so the DisCo meter on the wall
+                disambiguates units within a cell. That pairing is bound at registration and, with
+                the global registry, cannot be claimed twice. The honest limit is that only the
+                cell is re-checked at claim time — the meter is not — so the on-chain geofence is
+                a premises-level check, not a stall-level one.
               </P>
             </Section>
 
@@ -734,12 +757,25 @@ require answer > 0                        // a Chainlink answer is signed`}</Cod
 
               <H3>Cell-boundary false negatives</H3>
               <P>
-                The spatial lock requires an exact H3 cell match. A shop near a hexagon boundary,
-                or a claimant standing at the back of a deep stall, can resolve to an adjacent
-                cell and be refused a legitimate claim. Accepting the registered cell plus its
-                ring-1 neighbours would trade a little precision for a large reduction in false
-                rejections; we have not made that change because it also widens the
-                impersonation surface to seven cells.
+                The spatial lock still requires an exact cell match, and a merchant near a
+                boundary can drift across it and be refused. We considered accepting the
+                registered cell plus its six neighbours and rejected it: that trades a small
+                convenience for a sevenfold increase in the area a shop could be claimed from,
+                and it would be security spent on a user-interface problem.
+              </P>
+              <P>
+                Instead the boundary is now visible. Before the sweep starts, a live watch reports
+                whether the claimant is inside the registered cell, how many metres past its edge
+                they are if not, and which way to walk — and the sweep is held until they are
+                inside, so nobody spends three seconds filming a claim the contract would refuse.
+                The distance quoted is to the cell <em>boundary</em>, not its centre: at this
+                resolution someone standing legitimately inside their own cell can still be fifty
+                metres from the middle of it, so centre distance would be alarming and useless.
+              </P>
+              <P>
+                What this does not fix is a shop whose premises genuinely straddle two cells. That
+                case still needs a registration flow that can bind more than one, and there is not
+                one today.
               </P>
 
               <H3>Half the valuation is still a governance parameter</H3>
@@ -794,7 +830,7 @@ require answer > 0                        // a Chainlink answer is signed`}</Cod
                   ['Serial plate match', 'keccak256(serial) == assetId', 'on-chain, movable only'],
                   ['OCR crop points', 't = 1.2, 1.5, 1.8 s', 'client, full resolution'],
                   ['GPS accuracy ceiling', '≤ 100 m', 'client, at registration'],
-                  ['Spatial resolution', 'H3 res 10 (~66 m²)', 'on-chain exact match'],
+                  ['Spatial resolution', 'H3 res 10 (~12,300 m², ~150 m across)', 'on-chain exact match'],
                   ['Settlement chain', `cc3-testnet ${creditcoinTestnet.id}`, '—'],
                   ['Attestcoin source chain', 'Ethereum Sepolia, key 1', 'trustedSourcePortal, write-once'],
                   ['Challenge window', '24 hours', 'CHALLENGE_WINDOW'],
