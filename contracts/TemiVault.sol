@@ -266,6 +266,7 @@ contract TemiVault {
     );
 
     event ConduitLiquidityFunded(address indexed underwriter, uint256 amount, uint256 available);
+    event ConduitLiquidityWithdrawn(address indexed treasury, uint256 amount, uint256 available);
 
     event PriceObserved(
         uint64 indexed chainKey,
@@ -715,6 +716,23 @@ contract TemiVault {
         if (msg.value == 0) revert ZeroDeposit();
         conduitBackingAvailable += msg.value;
         emit ConduitLiquidityFunded(msg.sender, msg.value, conduitBackingAvailable);
+    }
+
+    /// @notice Reclaim conduit float that has not been allocated to anyone's reserve.
+    /// @dev    The counterpart to `fundConduitLiquidity`, and its absence was a genuine mistake:
+    ///         float paid in was a one-way trip, which strands an underwriter's capital the
+    ///         moment cross-chain volume is lower than they provisioned for.
+    ///
+    ///         Only unallocated backing can leave. Once a credit has been issued the tCTC belongs
+    ///         to an operator's Tier 1 or to the mutual buffer, and nothing here can reach it —
+    ///         `conduitBackingAvailable` has already been decremented by then.
+    function withdrawConduitLiquidity(uint256 amount) external onlyTreasury nonReentrant {
+        if (amount == 0 || amount > conduitBackingAvailable) {
+            revert InsufficientConduitBacking(amount, conduitBackingAvailable);
+        }
+        conduitBackingAvailable -= amount;
+        emit ConduitLiquidityWithdrawn(msg.sender, amount, conduitBackingAvailable);
+        _pay(msg.sender, amount);
     }
 
     /// @notice Register the portal contract this vault will accept Attestcoin proofs from.

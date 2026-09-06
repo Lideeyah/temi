@@ -24,11 +24,35 @@ contract TemiSourcePortal {
     ///                    address. Zero means "credit the depositor's own address".
     event ReserveFunded(address indexed depositor, uint256 amount, bytes32 indexed vaultTarget);
 
+    /// @notice Receives swept balances. Capital funded here backs credits issued on Creditcoin,
+    ///         so it has to be movable to wherever that settlement actually happens.
+    address public treasury;
+
     mapping(address => uint256) public lifetimeFunded;
     mapping(bytes32 => uint256) public fundedForVault;
     uint256 public totalFunded;
 
     error ZeroAmount();
+    error NotTreasury();
+    error SweepFailed();
+
+    event Swept(address indexed to, uint256 amount);
+
+    constructor(address treasury_) {
+        treasury = treasury_ == address(0) ? msg.sender : treasury_;
+    }
+
+    /// @notice Move funded capital to the treasury.
+    /// @dev    Without this the portal is a one-way sink: every deposit ever made would be
+    ///         stranded on the source chain while the vault issues credits against it on
+    ///         Creditcoin. The first version had no way out, which was simply a bug.
+    function sweep(uint256 amount) external {
+        if (msg.sender != treasury) revert NotTreasury();
+        uint256 value = amount == 0 ? address(this).balance : amount;
+        emit Swept(treasury, value);
+        (bool ok, ) = treasury.call{value: value}("");
+        if (!ok) revert SweepFailed();
+    }
 
     /// @notice Fund a Creditcoin operator's Tèmi reserve from Ethereum Sepolia.
     /// @param vaultTarget The operator's Creditcoin address as bytes32, or 0 to fund your own.

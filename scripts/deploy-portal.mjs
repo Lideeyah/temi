@@ -39,7 +39,11 @@ console.log(`Sepolia balance: ${formatEther(await sepPublic.getBalance({ address
 
 const portalArtifact = artifact('TemiSourcePortal');
 console.log('Deploying TemiSourcePortal to Ethereum Sepolia…');
-const hash = await sepWallet.deployContract({ abi: portalArtifact.abi, bytecode: portalArtifact.bytecode });
+const hash = await sepWallet.deployContract({
+  abi: portalArtifact.abi,
+  bytecode: portalArtifact.bytecode,
+  args: [account.address], // treasury, so funded capital can be swept out
+});
 const receipt = await sepPublic.waitForTransactionReceipt({ hash });
 const portal = receipt.contractAddress;
 console.log(`  TemiSourcePortal -> ${portal}`);

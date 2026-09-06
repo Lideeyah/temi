@@ -109,6 +109,7 @@ if (!portalAddress) {
     const portalTx = await sepWallet.deployContract({
       abi: portalArtifact.abi,
       bytecode: portalArtifact.bytecode,
+      args: [sepoliaAccount.address], // treasury, so funded capital can be swept out
     });
     const portalReceipt = await sepPublic.waitForTransactionReceipt({ hash: portalTx });
     portalAddress = portalReceipt.contractAddress;

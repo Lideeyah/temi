@@ -62,6 +62,23 @@ check('portal cannot be repointed',
 check('feed cannot be repointed',
   (await chain.call(vault, 'setTrustedPriceFeed', [CHAIN_KEY_SEPOLIA, '0x00000000000000000000000000000000000000ff'], { from: DEPLOYER })).revert === 'PriceFeedAlreadyConfigured');
 
+console.log('\n[8] Conduit float is recoverable — it must not be a one-way trip');
+const before = await chain.balanceOf(DEPLOYER);
+const out = await chain.call(vault, 'withdrawConduitLiquidity', [parseEther('0.5')], { from: DEPLOYER });
+const after = await chain.balanceOf(DEPLOYER);
+check('treasury can reclaim unallocated float', out.ok, out.revert);
+check('funds actually returned', after - before === parseEther('0.5'), formatEther(after - before));
+check('backing reduced', (await chain.call(vault, 'conduitBackingAvailable', [], { from: DEPLOYER })).value === parseEther('1.5'));
+
+const overdraw = await chain.call(vault, 'withdrawConduitLiquidity', [parseEther('999')], { from: DEPLOYER });
+check('cannot overdraw', !overdraw.ok, overdraw.revert);
+const notTreasury = await chain.call(vault, 'withdrawConduitLiquidity', [parseEther('0.1')], { from: '0x00000000000000000000000000000000000000ee' });
+check('only the treasury may reclaim', notTreasury.revert === 'NotTreasury', notTreasury.revert);
+
+// Money already credited to an operator must be unreachable from here.
+const reserveNow = (await chain.call(vault, 'getReserve', [DEPLOYER], { from: DEPLOYER })).value;
+check('an operator\'s credited reserve is untouchable by the treasury', reserveNow.tier1PersonalBalance > 0n);
+
 const held = (await chain.call(vault, 'totalReserves', [], { from: DEPLOYER })).value;
 console.log(`\n  vault holds ${formatEther(held)} tCTC after the rehearsal`);
 

@@ -797,6 +797,16 @@ require answer > 0                        // a Chainlink answer is signed`}</Cod
                 that a later claim could not pay — but it means cross-chain intake is capacity-
                 limited by a party the merchant must trust to keep it topped up.
               </P>
+              <P>
+                The first version of both contracts made this worse than it needed to be:{' '}
+                <Mono>fundConduitLiquidity</Mono> had no counterpart and the source portal had no
+                sweep, so capital put into either was a one-way trip. An underwriter who
+                provisioned for more cross-chain volume than materialised had no way to get their
+                float back. Both now have withdrawal paths, and the vault&apos;s can only reach
+                float that has not already been credited to an operator — once a credit is issued
+                the tCTC belongs to a Tier 1 balance or the mutual buffer and the treasury cannot
+                touch it. The instances currently deployed to cc3-testnet predate the fix.
+              </P>
 
               <H3>Declared value is self-reported</H3>
               <P>
