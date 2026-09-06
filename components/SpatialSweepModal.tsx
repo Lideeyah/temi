@@ -76,7 +76,11 @@ interface ClaimQuote {
 
 interface SettlementReceipt {
   txHash: Hex;
+  /** Net of the settlement fee — what actually reached the merchant. */
   payout: bigint;
+  /** Before the fee, as the solvency invariant computed it. */
+  gross: bigint;
+  fee: bigint;
   blockNumber: bigint;
 }
 
@@ -383,6 +387,8 @@ export function SpatialSweepModal({
       // Read the payout out of the ClaimSettled log. The contract caps the draw by the
       // solvency invariant, so the disbursed amount is routinely less than the declared value.
       let payout = 0n;
+      let gross = 0n;
+      let fee = 0n;
       for (const log of txReceipt.logs) {
         if (log.address.toLowerCase() !== TEMI_VAULT_ADDRESS.toLowerCase()) continue;
         try {
@@ -392,13 +398,20 @@ export function SpatialSweepModal({
             topics: log.topics,
           });
           if (decoded.eventName === 'ClaimSettled') {
-            payout = (decoded.args as { payout: bigint }).payout;
-            break;
+            gross = (decoded.args as { payout: bigint }).payout;
+          }
+          // Read the fee from the chain rather than recomputing it here — the receipt should
+          // show what was actually taken, not what the client believes the rate to be.
+          if (decoded.eventName === 'SettlementFeeTaken') {
+            const args = decoded.args as { gross: bigint; fee: bigint; net: bigint };
+            fee += args.fee;
+            payout += args.net;
           }
         } catch {
           // Not a TemiVault event we model; keep scanning.
         }
       }
+      if (gross === 0n) gross = payout + fee;
 
       for (const log of txReceipt.logs) {
         if (log.address.toLowerCase() !== TEMI_VAULT_ADDRESS.toLowerCase()) continue;
@@ -415,7 +428,7 @@ export function SpatialSweepModal({
         }
       }
 
-      setReceipt({ txHash: hash, payout, blockNumber: txReceipt.blockNumber });
+      setReceipt({ txHash: hash, payout, gross, fee, blockNumber: txReceipt.blockNumber });
       setPhase('settled');
       onSettled();
 
@@ -738,13 +751,31 @@ export function SpatialSweepModal({
 
           <div className="border border-hairline bg-card px-3.5 py-3">
             <p className="eyebrow mb-2">Settlement</p>
+
+            {/* Itemised, because a fee a merchant discovers afterwards is a fee they resent. */}
+            <div className="mb-2 space-y-1 border-b border-hairline pb-2">
+              <div className="flex items-baseline justify-between">
+                <span className="text-[11px] text-slate-soft">Claimed loss</span>
+                <span className="tabular text-[11px] text-slate-strong">
+                  ₦{formatNgn(claimedLoss)}
+                </span>
+              </div>
+              <div className="flex items-baseline justify-between">
+                <span className="text-[11px] text-slate-soft">Gross invariant payout</span>
+                <span className="tabular text-[11px] text-ink">₦{formatNgn(receipt.gross)}</span>
+              </div>
+              <div className="flex items-baseline justify-between">
+                <span className="text-[11px] text-slate-soft">Protocol settlement fee · 1.5%</span>
+                <span className="tabular text-[11px] text-rust">−₦{formatNgn(receipt.fee)}</span>
+              </div>
+            </div>
+
             <div className="mb-2 flex items-baseline justify-between">
-              <span className="text-[11px] text-slate-soft">Disbursed</span>
+              <span className="text-[11px] text-slate-soft">Net dispatched</span>
               <span className="tabular text-[19px] font-semibold tracking-[-0.02em] text-ink">
                 {formatTctc(receipt.payout)} <span className="text-[12px] text-slate-soft">tCTC</span>
               </span>
             </div>
-            <MetricRow label="Claimed" value={`${formatTctc(claimedLoss)} tCTC`} />
             <MetricRow label="Block" value={receipt.blockNumber.toString()} />
             <MetricRow label="Tx" value={truncateHash(receipt.txHash)} title={receipt.txHash} />
             {telemetry ? (

@@ -20,10 +20,16 @@ source portal registered for chain key 1 (both **write-once, already set**), tCT
 
 ## Pending for the final deploy
 
-- `TemiVault.withdrawConduitLiquidity` — treasury reclaim of unallocated float. Not on-chain.
-- `TemiSourcePortal` constructor now takes a treasury, and gains `sweep`. Not on-chain.
+- `TemiVault.withdrawConduitLiquidity` — treasury reclaim of unallocated float.
+- `TemiSourcePortal` constructor takes a treasury, and gains `sweep`.
+- **Protocol revenue**: 1.5% settlement fee, 15% yield spread, `distributeYield` /
+  `compoundYield` / `pendingYield`, `protocolTreasury`, `yieldStrategy`.
+- **Reserve sizing**: `Asset` gains `targetReserve`, `targetHorizonMonths`, `registeredAt`;
+  `registerAsset` takes two more arguments; `suggestedTargetReserve` and `coverageHealthBps`.
 
-Neither is called by the app, so the running UI is safe against the deployed bytecode.
+The app reads the revenue functions, so those calls are wrapped individually and fall back to
+"not on this deployment" rather than rejecting the batch and blanking the dashboard. Verified
+against the live vault. `npm run drift` lists the gap.
 
 ## Cost of redeploying
 

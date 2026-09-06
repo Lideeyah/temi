@@ -41,9 +41,18 @@ contract TemiVault {
     struct Asset {
         bytes32 assetId;
         AssetCategory category;
-        uint256 declaredValue;
-        uint64 h3CellIndex;
         bool isActive;
+        uint64 h3CellIndex;
+        /// @notice Months the operator chose to reach `targetReserve` over.
+        uint64 targetHorizonMonths;
+        uint64 registeredAt;
+        uint256 declaredValue;
+        /// @notice The reserve this asset should be backed by, in wei of tCTC.
+        /// @dev    Tèmi charges no premium, so there is no policy to underwrite. What replaces
+        ///         underwriting is sizing: telling an operator how much to hold rather than
+        ///         leaving them to guess. Stored so the dashboard can show funding progress
+        ///         against a figure the chain agrees with, not one the client invented.
+        uint256 targetReserve;
     }
 
     enum ClaimStatus {
@@ -183,6 +192,25 @@ contract TemiVault {
     /// @notice Minimum motion-parallax score on a 0-1000 scale. Rejects 2D screens and photographs.
     uint256 public constant MIN_PARALLAX_SCORE = 850;
 
+    /* ---------------- protocol revenue ---------------- */
+
+    /// @notice Taken from a claim payout, in basis points. 150 = 1.5%.
+    /// @dev    Charged only when the protocol actually delivers money to a merchant. There is no
+    ///         premium, no subscription and no fee on deposits or withdrawals — an operator who
+    ///         never claims pays nothing, ever. A rejected claim is not a delivery and is not
+    ///         charged.
+    uint256 public constant PROTOCOL_SETTLEMENT_FEE_BPS = 150;
+
+    /// @notice The protocol's share of yield earned on idle reserves. 1500 = 15%.
+    uint256 public constant YIELD_PROTOCOL_SHARE_BPS = 1_500;
+
+    /// @notice Suggested reserve target as a share of declared value, per asset class.
+    /// @dev    Movable hardware fails more often and is replaced whole; commercial property
+    ///         damage is usually partial. Exposed on-chain so the figure the interface shows an
+    ///         operator is the same one the contract records against their asset.
+    uint256 public constant TARGET_RESERVE_MOVABLE_BPS = 3_000; // 30%
+    uint256 public constant TARGET_RESERVE_PROPERTY_BPS = 2_000; // 20%
+
     /* ---------------- optimistic settlement ---------------- */
 
     /// @notice How long a large mutual-buffer draw sits open to challenge.
@@ -234,6 +262,22 @@ contract TemiVault {
 
     /// @notice Resolves challenges. A trust point, and named as one.
     address public arbiter;
+
+    /// @notice Receives settlement fees and the protocol's share of yield.
+    address public protocolTreasury;
+    uint256 public totalProtocolFees;
+    uint256 public totalYieldDistributed;
+
+    /// @notice Cumulative yield per unit of Tier 1, scaled by 1e18.
+    /// @dev    The standard scalable-distribution index. Paying every holder directly on each
+    ///         distribution would cost gas proportional to the number of merchants; this makes
+    ///         a distribution O(1) and each operator's entitlement computable on demand.
+    uint256 public yieldPerTier1Wad;
+    mapping(address => uint256) private _yieldSnapshot;
+    mapping(address => uint256) public accruedYield;
+
+    /// @notice Where idle reserves are put to work. Unset today — see `distributeYield`.
+    address public yieldStrategy;
 
     uint256 private _reentrancyLock;
 
@@ -321,6 +365,11 @@ contract TemiVault {
         uint256 challengerReward
     );
     event ArbiterSet(address previous, address current);
+    event ProtocolTreasurySet(address previous, address current);
+    event SettlementFeeTaken(address indexed operator, uint256 gross, uint256 fee, uint256 net);
+    event YieldDistributed(uint256 total, uint256 toOperators, uint256 toProtocol, uint256 indexDelta);
+    event YieldCompounded(address indexed operator, uint256 amount, uint256 newTier1Balance);
+    event YieldStrategySet(address previous, address current);
 
     /* ------------------------------------------------------------------ */
     /*                              ERRORS                                 */
@@ -367,6 +416,9 @@ contract TemiVault {
     error ChallengeWindowClosed(uint64 until);
     error InsufficientChallengeBond(uint256 posted, uint256 required);
     error BondRequired(uint256 required, uint256 available);
+    error NoYieldToCompound();
+    error NoTier1ToDistributeTo();
+    error TargetReserveRequired();
 
     modifier nonReentrant() {
         if (_reentrancyLock == 1) revert Reentrancy();
@@ -383,6 +435,7 @@ contract TemiVault {
     constructor(address treasury_) {
         treasury = treasury_ == address(0) ? msg.sender : treasury_;
         arbiter = treasury;
+        protocolTreasury = treasury;
     }
 
     modifier onlyArbiter() {
@@ -759,22 +812,35 @@ contract TemiVault {
     /// @param category      MOVABLE_HARDWARE or FIXED_PROPERTY.
     /// @param declaredValue Operator-declared replacement value, in wei of tCTC.
     /// @param h3CellIndex   Uber H3 resolution-10 cell. Required for FIXED_PROPERTY, 0 otherwise.
+    /// @param targetReserve        Reserve the operator is aiming to hold behind this asset.
+    ///                             Pass 0 to accept the protocol's suggestion.
+    /// @param targetHorizonMonths  Months they intend to reach it over.
     function registerAsset(
         bytes32 assetId,
         AssetCategory category,
         uint256 declaredValue,
-        uint64 h3CellIndex
+        uint64 h3CellIndex,
+        uint256 targetReserve,
+        uint64 targetHorizonMonths
     ) external {
         if (assetOwner[assetId] != address(0)) revert AssetAlreadyRegistered(assetId);
         if (declaredValue == 0) revert DeclaredValueRequired();
         if (category == AssetCategory.FIXED_PROPERTY && h3CellIndex == 0) revert SpatialCellRequired();
 
+        uint256 target = targetReserve == 0
+            ? suggestedTargetReserve(category, declaredValue)
+            : targetReserve;
+        if (target == 0) revert TargetReserveRequired();
+
         _assets[assetId] = Asset({
             assetId: assetId,
             category: category,
-            declaredValue: declaredValue,
+            isActive: true,
             h3CellIndex: category == AssetCategory.FIXED_PROPERTY ? h3CellIndex : 0,
-            isActive: true
+            targetHorizonMonths: targetHorizonMonths == 0 ? 6 : targetHorizonMonths,
+            registeredAt: uint64(block.timestamp),
+            declaredValue: declaredValue,
+            targetReserve: target
         });
         assetOwner[assetId] = msg.sender;
         _ownedAssetIds[msg.sender].push(assetId);
@@ -833,6 +899,7 @@ contract TemiVault {
             revert SerialPlateMismatch(claimAssetHash, assetId);
         }
 
+        _accrueYield(msg.sender);
         UserReserve storage reserve = reserves[msg.sender];
 
         // Solvency invariant. Tier 1 is the claimant's own money and drains first.
@@ -881,8 +948,9 @@ contract TemiVault {
         if (tier2Draw <= instantCap) {
             totalClaimsSettled += 1;
             totalValueDisbursed += tier1Draw + tier2Draw;
-            payout = tier1Draw + tier2Draw + msg.value; // any bond sent is simply returned
-            _pay(msg.sender, payout);
+            // Net of the settlement fee. Any bond sent is not a payout and returns whole.
+            payout = _disburseClaim(msg.sender, tier1Draw + tier2Draw);
+            _pay(msg.sender, msg.value);
             return (payout, 0);
         }
 
@@ -913,7 +981,9 @@ contract TemiVault {
         });
         totalEscrowed += tier2Draw + bond;
 
-        payout = tier1Draw + refund;
+        // The Tier 1 portion is delivered now, so it is charged now. The escrowed portion is
+        // charged when it is actually released, and not at all if the claim is rejected.
+        payout = _disburseClaim(msg.sender, tier1Draw);
 
         emit ClaimEscrowed(
             claimId,
@@ -925,7 +995,7 @@ contract TemiVault {
             uint64(block.timestamp + CHALLENGE_WINDOW)
         );
 
-        if (payout > 0) _pay(msg.sender, payout);
+        if (refund > 0) _pay(msg.sender, refund);
     }
 
     /* ------------------------------------------------------------------ */
@@ -943,14 +1013,15 @@ contract TemiVault {
         uint64 until = claim.filedAt + uint64(CHALLENGE_WINDOW);
         if (block.timestamp < until) revert ChallengeWindowOpen(until);
 
-        released = claim.escrowedTier2 + claim.bond;
         claim.status = ClaimStatus.Settled;
-        totalEscrowed -= released;
+        totalEscrowed -= claim.escrowedTier2 + claim.bond;
         totalClaimsSettled += 1;
         totalValueDisbursed += claim.escrowedTier2;
 
-        emit ClaimFinalised(claimId, claim.claimant, released);
-        _pay(claim.claimant, released);
+        released = _disburseClaim(claim.claimant, claim.escrowedTier2);
+        _pay(claim.claimant, claim.bond); // their own stake, returned whole
+
+        emit ClaimFinalised(claimId, claim.claimant, released + claim.bond);
     }
 
     /// @notice Contest an escrowed claim, staking a matching bond against it.
@@ -1014,8 +1085,10 @@ contract TemiVault {
         totalClaimsSettled += 1;
         totalValueDisbursed += escrow;
 
-        emit ClaimFinalised(claimId, claimant, escrow + bond + challengeBond);
-        _pay(claimant, escrow + bond + challengeBond);
+        uint256 net = _disburseClaim(claimant, escrow);
+        _pay(claimant, bond + challengeBond); // own stake back, plus the failed challenger's
+
+        emit ClaimFinalised(claimId, claimant, net + bond + challengeBond);
     }
 
     /// @notice What a claim would do right now, so the interface can say so before it is signed.
@@ -1053,12 +1126,136 @@ contract TemiVault {
         if (!ok) revert TransferFailed();
     }
 
+    /// @notice Pay a claim, net of the settlement fee.
+    /// @dev    Every path that hands claim money to a merchant goes through here, so the fee is
+    ///         charged exactly once per unit disbursed and cannot be forgotten on a new path.
+    ///         Returning a bond or a challenger's stake does not go through here: that is the
+    ///         operator's own money coming back, not a payout.
+    function _disburseClaim(address to, uint256 gross) private returns (uint256 net) {
+        if (gross == 0) return 0;
+
+        uint256 fee = (gross * PROTOCOL_SETTLEMENT_FEE_BPS) / BPS_DENOMINATOR;
+        net = gross - fee;
+
+        if (fee > 0) {
+            totalProtocolFees += fee;
+            _pay(protocolTreasury, fee);
+        }
+        emit SettlementFeeTaken(to, gross, fee, net);
+        _pay(to, net);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*                        PROTOCOL REVENUE                             */
+    /* ------------------------------------------------------------------ */
+
+    function setProtocolTreasury(address newTreasury) external onlyTreasury {
+        if (newTreasury == address(0)) revert InvalidPortal();
+        emit ProtocolTreasurySet(protocolTreasury, newTreasury);
+        protocolTreasury = newTreasury;
+    }
+
+    /// @notice Nominate the contract that will put idle reserves to work.
+    /// @dev    Unset at the time of writing, and deliberately so. Creditcoin exposes no staking
+    ///         precompile to the EVM — the runtime's precompile set is signature verification,
+    ///         hashing, `SubstrateTransfer` and the USC verifiers — so a vault cannot nominate
+    ///         validators from Solidity. A DEX venue would need a router and pool address that
+    ///         can be verified on cc3-testnet. Until one of those exists this stays address(0)
+    ///         and the interface reports no strategy rather than quoting a yield nobody earned.
+    function setYieldStrategy(address strategy) external onlyTreasury {
+        emit YieldStrategySet(yieldStrategy, strategy);
+        yieldStrategy = strategy;
+    }
+
+    /// @notice Bring earned yield into the vault and split it 85/15.
+    /// @dev    Payable and permissionless by design: whatever generates the yield — a strategy
+    ///         adapter, a validator payout, the treasury during a demonstration — simply sends
+    ///         it here. The split and the per-operator accounting are the parts that have to be
+    ///         right, and they are the same regardless of where the money came from.
+    function distributeYield() external payable {
+        if (msg.value == 0) revert ZeroDeposit();
+        if (totalTier1Balance == 0) revert NoTier1ToDistributeTo();
+
+        uint256 toProtocol = (msg.value * YIELD_PROTOCOL_SHARE_BPS) / BPS_DENOMINATOR;
+        uint256 toOperators = msg.value - toProtocol;
+
+        uint256 delta = (toOperators * 1e18) / totalTier1Balance;
+        yieldPerTier1Wad += delta;
+        totalYieldDistributed += toOperators;
+
+        if (toProtocol > 0) {
+            totalProtocolFees += toProtocol;
+            _pay(protocolTreasury, toProtocol);
+        }
+        emit YieldDistributed(msg.value, toOperators, toProtocol, delta);
+    }
+
+    /// @dev Fold an operator's share of everything distributed since we last looked at them.
+    ///      Must run before any change to their Tier 1 balance, or the new balance would earn
+    ///      yield distributed before they held it.
+    function _accrueYield(address operator) private {
+        uint256 index = yieldPerTier1Wad;
+        uint256 snapshot = _yieldSnapshot[operator];
+        if (index > snapshot) {
+            uint256 earned = (reserves[operator].tier1PersonalBalance * (index - snapshot)) / 1e18;
+            if (earned > 0) accruedYield[operator] += earned;
+        }
+        _yieldSnapshot[operator] = index;
+    }
+
+    /// @notice Yield an operator has earned but not yet compounded.
+    function pendingYield(address operator) public view returns (uint256) {
+        uint256 index = yieldPerTier1Wad;
+        uint256 snapshot = _yieldSnapshot[operator];
+        uint256 unrealised = index > snapshot
+            ? (reserves[operator].tier1PersonalBalance * (index - snapshot)) / 1e18
+            : 0;
+        return accruedYield[operator] + unrealised;
+    }
+
+    /// @notice Move earned yield into the withdrawable Tier 1 balance.
+    function compoundYield() external returns (uint256 amount) {
+        _accrueYield(msg.sender);
+        amount = accruedYield[msg.sender];
+        if (amount == 0) revert NoYieldToCompound();
+
+        accruedYield[msg.sender] = 0;
+        reserves[msg.sender].tier1PersonalBalance += amount;
+        totalTier1Balance += amount;
+
+        emit YieldCompounded(msg.sender, amount, reserves[msg.sender].tier1PersonalBalance);
+    }
+
+    /// @notice The reserve Tèmi suggests backing an asset with, given its declared value.
+    function suggestedTargetReserve(AssetCategory category, uint256 declaredValue)
+        public
+        pure
+        returns (uint256)
+    {
+        uint256 bps = category == AssetCategory.FIXED_PROPERTY
+            ? TARGET_RESERVE_PROPERTY_BPS
+            : TARGET_RESERVE_MOVABLE_BPS;
+        return (declaredValue * bps) / BPS_DENOMINATOR;
+    }
+
+    /// @notice How far an operator has funded an asset's target, in basis points.
+    /// @dev    Measured against lifetime deposits rather than the current balance, so drawing
+    ///         your own money down does not read as losing cover you paid for.
+    function coverageHealthBps(bytes32 assetId) external view returns (uint256) {
+        Asset memory asset = _assets[assetId];
+        if (asset.targetReserve == 0) return 0;
+        uint256 funded = reserves[assetOwner[assetId]].lifetimeDeposits;
+        uint256 bps = (funded * BPS_DENOMINATOR) / asset.targetReserve;
+        return bps > BPS_DENOMINATOR ? BPS_DENOMINATOR : bps;
+    }
+
     /* ------------------------------------------------------------------ */
     /*                            WITHDRAWAL                               */
     /* ------------------------------------------------------------------ */
 
     /// @notice Unencumbered withdrawal of personal Tier 1 funds. No lock-up, no forfeiture.
     function withdrawTier1(uint256 amount) external nonReentrant {
+        _accrueYield(msg.sender);
         UserReserve storage reserve = reserves[msg.sender];
         if (amount == 0 || amount > reserve.tier1PersonalBalance) {
             revert InsufficientTier1(amount, reserve.tier1PersonalBalance);
@@ -1079,6 +1276,10 @@ contract TemiVault {
 
     /// @dev The single 85/15 accounting path shared by every funding rail.
     function _creditReserve(address operator, uint256 grossAmount) private {
+        // Settle what they have earned so far before their balance moves, or the new balance
+        // would retroactively earn yield distributed before they held it.
+        _accrueYield(operator);
+
         uint256 tier1Amount = (grossAmount * TIER1_SPLIT_BPS) / BPS_DENOMINATOR;
         // Remainder rather than a second multiplication: no wei is ever stranded.
         uint256 tier2Amount = grossAmount - tier1Amount;

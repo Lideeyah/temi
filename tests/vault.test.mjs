@@ -24,6 +24,8 @@ const OTHER = '0x4444444444444444444444444444444444444444';
 // Telemetry that clears both on-chain gates.
 const GOOD = { jitter: 2757n, parallax: 901n };
 const ZERO = `0x${'0'.repeat(64)}`;
+/** Claim payouts arrive net of the 1.5% settlement fee. */
+const netOf = (gross) => gross - (gross * 150n) / 10000n;
 
 const chain = await createChain();
 for (const who of [TREASURY, MERCHANT, ATTACKER, OTHER]) await chain.fund(who, E('10000'));
@@ -45,10 +47,10 @@ check('lifetimeDeposits tracked', reserve.lifetimeDeposits === E('10'));
 /* ---------------------------------------------------------------- */
 console.log('\n[2] Asset identity is global and binds once');
 const gen = assetId('FIRMAN-3.5KVA-0001');
-check('register succeeds', (await chain.call(vault, 'registerAsset', [gen, 0, E('5'), 0n], { from: MERCHANT })).ok);
-const dupe = await chain.call(vault, 'registerAsset', [gen, 0, E('5'), 0n], { from: ATTACKER });
+check('register succeeds', (await chain.call(vault, 'registerAsset', [gen, 0, E('5'), 0n, 0n, 6n], { from: MERCHANT })).ok);
+const dupe = await chain.call(vault, 'registerAsset', [gen, 0, E('5'), 0n, 0n, 6n], { from: ATTACKER });
 check('another operator cannot re-register the same plate', !dupe.ok, dupe.revert);
-const noCell = await chain.call(vault, 'registerAsset', [assetId('shop-x'), 1, E('5'), 0n], { from: MERCHANT });
+const noCell = await chain.call(vault, 'registerAsset', [assetId('shop-x'), 1, E('5'), 0n, 0n, 6n], { from: MERCHANT });
 check('fixed property requires an H3 cell', !noCell.ok, noCell.revert);
 
 /* ---------------------------------------------------------------- */
@@ -82,7 +84,7 @@ check('matching plate settles', rightPlate.ok, rightPlate.ok ? fmt(rightPlate.va
 /* ---------------------------------------------------------------- */
 console.log('\n[4] Spatial lock for fixed property');
 const shop = assetId('h3+meter');
-await chain.call(vault, 'registerAsset', [shop, 1, E('5'), 622234000000000000n], { from: MERCHANT });
+await chain.call(vault, 'registerAsset', [shop, 1, E('5'), 622234000000000000n, 0n, 6n], { from: MERCHANT });
 const wrongCell = await chain.call(vault, 'settleClaim', [shop, E('1'), GOOD.jitter, GOOD.parallax, 622234000000000001n, ZERO], { from: MERCHANT });
 check('wrong H3 cell reverts', !wrongCell.ok, wrongCell.revert);
 const rightCell = await chain.call(vault, 'settleClaim', [shop, E('1'), GOOD.jitter, GOOD.parallax, 622234000000000000n, ZERO], { from: MERCHANT });
@@ -118,7 +120,7 @@ let reverted = 0;
 const escrowedIds = [];
 for (let i = 0; i < 10; i++) {
   const id = assetId(`fake-asset-${i}`);
-  await chain.call(vault, 'registerAsset', [id, 0, E('50'), 0n], { from: ATTACKER });
+  await chain.call(vault, 'registerAsset', [id, 0, E('50'), 0n, 0n, 6n], { from: ATTACKER });
   const r = await chain.call(vault, 'settleClaim', [id, E('50'), GOOD.jitter, GOOD.parallax, 0n, id], { from: ATTACKER });
   if (r.ok) { settled++; if (r.value[1] > 0n) escrowedIds.push(r.value[1]); }
   else reverted++;

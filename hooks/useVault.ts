@@ -51,6 +51,18 @@ export interface PendingClaim {
   challengeableUntil: bigint;
 }
 
+export interface RevenueState {
+  /** Yield this operator has earned but not yet compounded. */
+  pendingYield: bigint;
+  /** Fees + protocol yield share collected since deployment. */
+  totalProtocolFees: bigint;
+  /** Yield credited to operators, cumulative. */
+  totalYieldDistributed: bigint;
+  /** address(0) while nothing is put to work — see the whitepaper. */
+  yieldStrategy: Address;
+  protocolTreasury: Address;
+}
+
 export interface VaultState {
   tier1PersonalBalance: bigint;
   lifetimeDeposits: bigint;
@@ -60,6 +72,7 @@ export interface VaultState {
   telemetry: VaultTelemetry | null;
   oracle: OracleState | null;
   claims: PendingClaim[];
+  revenue: RevenueState | null;
   blockNumber: bigint | null;
   loading: boolean;
   error: string | null;
@@ -74,6 +87,7 @@ const EMPTY: VaultState = {
   telemetry: null,
   oracle: null,
   claims: [],
+  revenue: null,
   blockNumber: null,
   loading: true,
   error: null,
@@ -101,7 +115,10 @@ export function useVault(address: Address | null, pollMs = 12_000) {
       const contract = { address: TEMI_VAULT_ADDRESS, abi: temiVaultAbi } as const;
       const operator = address ?? '0x0000000000000000000000000000000000000000';
 
-      const [reserve, headroom, assets, telemetry, priceObs, ctcUsd, fresh, blockNumber] = await Promise.all([
+      const [
+        reserve, headroom, assets, telemetry, priceObs, ctcUsd, fresh, blockNumber,
+        pendingYield, protocolFees, yieldDistributed, strategy, protoTreasury,
+      ] = await Promise.all([
         creditcoinPublicClient.readContract({ ...contract, functionName: 'getReserve', args: [operator] }),
         creditcoinPublicClient.readContract({ ...contract, functionName: 'quoteTier2Headroom', args: [operator] }),
         creditcoinPublicClient.readContract({ ...contract, functionName: 'getOwnedAssets', args: [operator] }),
@@ -110,6 +127,24 @@ export function useVault(address: Address | null, pollMs = 12_000) {
         creditcoinPublicClient.readContract({ ...contract, functionName: 'ctcUsdWad' }),
         creditcoinPublicClient.readContract({ ...contract, functionName: 'isPriceFresh' }),
         creditcoinPublicClient.getBlockNumber(),
+        // The revenue surface postdates the live deployment, so these are read defensively:
+        // a vault that predates them should render as "unavailable" rather than taking the
+        // whole dashboard down with a rejected batch. `npm run drift` shows the gap.
+        creditcoinPublicClient
+          .readContract({ ...contract, functionName: 'pendingYield', args: [operator] })
+          .catch(() => null),
+        creditcoinPublicClient
+          .readContract({ ...contract, functionName: 'totalProtocolFees' })
+          .catch(() => null),
+        creditcoinPublicClient
+          .readContract({ ...contract, functionName: 'totalYieldDistributed' })
+          .catch(() => null),
+        creditcoinPublicClient
+          .readContract({ ...contract, functionName: 'yieldStrategy' })
+          .catch(() => null),
+        creditcoinPublicClient
+          .readContract({ ...contract, functionName: 'protocolTreasury' })
+          .catch(() => null),
       ]);
 
       const t = telemetry as readonly bigint[];
@@ -192,6 +227,19 @@ export function useVault(address: Address | null, pollMs = 12_000) {
           lastChainKey: t[8],
         },
         claims,
+        // Null across the board means this vault predates the revenue functions entirely.
+        revenue:
+          strategy === null && protocolFees === null
+            ? null
+            : {
+                pendingYield: (pendingYield as bigint | null) ?? 0n,
+                totalProtocolFees: (protocolFees as bigint | null) ?? 0n,
+                totalYieldDistributed: (yieldDistributed as bigint | null) ?? 0n,
+                yieldStrategy:
+                  (strategy as Address | null) ?? '0x0000000000000000000000000000000000000000',
+                protocolTreasury:
+                  (protoTreasury as Address | null) ?? '0x0000000000000000000000000000000000000000',
+              },
         oracle: {
           answerWad: p[0],
           roundId: p[1],

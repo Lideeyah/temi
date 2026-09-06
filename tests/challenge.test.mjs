@@ -24,6 +24,8 @@ const CHALLENGER = '0x3333333333333333333333333333333333333333';
 const BYSTANDER = '0x4444444444444444444444444444444444444444';
 const GOOD = { jitter: 2757n, parallax: 901n };
 const HOUR = 3600n;
+/** Claim money arrives net of the 1.5% settlement fee; bonds and stakes return whole. */
+const netOf = (gross) => gross - (gross * 150n) / 10000n;
 
 const assetId = (s) => keccak256(toHex(s));
 
@@ -55,7 +57,7 @@ console.log('\n[1] A merchant taking back their own Tier 1 is never delayed');
   const { chain, vault } = await freshChain();
   await chain.call(vault, 'depositReserve', [], { from: MERCHANT, value: E('100') });
   const id = assetId('gen-own-money');
-  await chain.call(vault, 'registerAsset', [id, 0, E('80'), 0n], { from: MERCHANT });
+  await chain.call(vault, 'registerAsset', [id, 0, E('80'), 0n, 0n, 6n], { from: MERCHANT });
 
   const before = await chain.balanceOf(MERCHANT);
   const r = await chain.call(vault, 'settleClaim', [id, E('80'), GOOD.jitter, GOOD.parallax, 0n, id], { from: MERCHANT });
@@ -63,7 +65,7 @@ console.log('\n[1] A merchant taking back their own Tier 1 is never delayed');
 
   check('settles', r.ok, r.revert);
   check('no escrow opened', r.value?.[1] === 0n, `claimId ${r.value?.[1]}`);
-  check('paid in full immediately', after - before === E('80'), fmt(after - before));
+  check('paid immediately, net of the settlement fee', after - before === netOf(E('80')), fmt(after - before));
   await assertSolvent(chain, vault, 'after instant claim');
 }
 
@@ -74,13 +76,13 @@ console.log('\n[2] A small mutual-buffer draw also settles instantly');
   await chain.call(vault, 'depositReserve', [], { from: MERCHANT, value: E('10') });
   const id = assetId('gen-small-draw');
   // Tier 1 is 8.5; claim 9 draws 0.5 from a ~226 tCTC pool — far under the 1% instant cap.
-  await chain.call(vault, 'registerAsset', [id, 0, E('9'), 0n], { from: MERCHANT });
+  await chain.call(vault, 'registerAsset', [id, 0, E('9'), 0n, 0n, 6n], { from: MERCHANT });
 
   const before = await chain.balanceOf(MERCHANT);
   const r = await chain.call(vault, 'settleClaim', [id, E('9'), GOOD.jitter, GOOD.parallax, 0n, id], { from: MERCHANT });
   const after = await chain.balanceOf(MERCHANT);
   check('no escrow for a sub-1% draw', r.value?.[1] === 0n);
-  check('paid immediately', after - before === E('9'), fmt(after - before));
+  check('paid immediately, net of fee', after - before === netOf(E('9')), fmt(after - before));
 }
 
 /* ================================================================== */
@@ -92,7 +94,7 @@ let bond;
   const { chain, vault } = big;
   await chain.call(vault, 'depositReserve', [], { from: MERCHANT, value: E('100') });
   const id = assetId('gen-big');
-  await chain.call(vault, 'registerAsset', [id, 0, E('90'), 0n], { from: MERCHANT });
+  await chain.call(vault, 'registerAsset', [id, 0, E('90'), 0n, 0n, 6n], { from: MERCHANT });
 
   const quote = (await chain.call(vault, 'quoteClaim', [id, E('90'), MERCHANT], { from: MERCHANT })).value;
   console.log(`  quote: tier1 ${fmt(quote[0])}  tier2 ${fmt(quote[1])}  instant ${quote[2]}  bond needed ${fmt(quote[3])}`);
@@ -111,7 +113,8 @@ let bond;
   console.log(`  escrowed ${fmt(claim[2])}  bond ${fmt(bond)}  paid now ${fmt(after - before)}`);
   check('tier2 escrowed, not paid', claim[2] === quote[1]);
   check('bond is 10% of the escrow', bond === (quote[1] * 1000n) / 10000n);
-  check('immediate payout is tier1 minus the withheld bond', after - before === quote[0] - bond, fmt(after - before));
+  check('immediate payout is tier1 less the bond, net of fee',
+    after - before === netOf(quote[0] - bond), fmt(after - before));
   check('status is Pending', claim[7] === 1);
   await assertSolvent(chain, vault, 'with an open escrow');
 }
@@ -139,7 +142,8 @@ console.log('\n[5] Unchallenged, it pays out — and anyone can trigger that');
   const after = await chain.balanceOf(MERCHANT);
   check('a bystander can finalise', fin.ok, fin.revert);
   const claim = (await chain.call(vault, 'pendingClaims', [claimId], { from: MERCHANT })).value;
-  check('escrow plus bond released to the claimant', after - before === claim[2] + claim[3], fmt(after - before));
+  check('escrow released net of fee, bond returned whole',
+    after - before === netOf(claim[2]) + claim[3], fmt(after - before));
   check('status is Settled', claim[7] === 3);
   check('nothing left escrowed', (await chain.call(vault, 'totalEscrowed', [], { from: TREASURY })).value === 0n);
   const done = await chain.call(vault, 'finaliseClaim', [claimId], { from: BYSTANDER, timestamp: 26n * HOUR });
@@ -153,7 +157,7 @@ console.log('\n[6] A correct challenge: the buffer is made whole and the fraud p
   const { chain, vault } = await freshChain();
   await chain.call(vault, 'depositReserve', [], { from: MERCHANT, value: E('100') });
   const id = assetId('gen-fraud');
-  await chain.call(vault, 'registerAsset', [id, 0, E('90'), 0n], { from: MERCHANT });
+  await chain.call(vault, 'registerAsset', [id, 0, E('90'), 0n, 0n, 6n], { from: MERCHANT });
 
   const poolBefore = (await chain.call(vault, 'totalTier2PoolBalance', [], { from: TREASURY })).value;
   const r = await chain.call(vault, 'settleClaim', [id, E('90'), GOOD.jitter, GOOD.parallax, 0n, id], { from: MERCHANT });
@@ -199,7 +203,7 @@ console.log('\n[7] A wrong challenge pays the merchant it delayed');
   const { chain, vault } = await freshChain();
   await chain.call(vault, 'depositReserve', [], { from: MERCHANT, value: E('100') });
   const id = assetId('gen-honest');
-  await chain.call(vault, 'registerAsset', [id, 0, E('90'), 0n], { from: MERCHANT });
+  await chain.call(vault, 'registerAsset', [id, 0, E('90'), 0n, 0n, 6n], { from: MERCHANT });
 
   const r = await chain.call(vault, 'settleClaim', [id, E('90'), GOOD.jitter, GOOD.parallax, 0n, id], { from: MERCHANT });
   const cid = r.value[1];
@@ -215,8 +219,9 @@ console.log('\n[7] A wrong challenge pays the merchant it delayed');
   const merchAfter = await chain.balanceOf(MERCHANT);
   const chalAfter = await chain.balanceOf(CHALLENGER);
 
-  console.log(`  merchant received ${fmt(merchAfter - merchBefore)} (escrow ${fmt(escrow)} + bond ${fmt(claimBond)} + forfeited stake ${fmt(claimBond)})`);
-  check('merchant gets escrow, bond back and the stake', merchAfter - merchBefore === escrow + claimBond + claimBond);
+  console.log(`  merchant received ${fmt(merchAfter - merchBefore)} (escrow ${fmt(escrow)} net of fee + bond ${fmt(claimBond)} + forfeited stake ${fmt(claimBond)})`);
+  check('merchant gets escrow net of fee, plus bond and the forfeited stake',
+    merchAfter - merchBefore === netOf(escrow) + claimBond + claimBond);
   check('griefing is not free — challenger lost their stake', chalAfter - chalBefore === -claimBond, fmt(chalBefore - chalAfter));
   await assertSolvent(chain, vault, 'after a failed challenge');
 }

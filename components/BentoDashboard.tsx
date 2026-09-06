@@ -40,6 +40,8 @@ import {
   type Denomination,
 } from '@/lib/format';
 import { cn } from '@/lib/utils';
+
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 import { DepositModal } from './DepositModal';
 import { RegisterAssetModal } from './RegisterAssetModal';
 import { SpatialSweepModal } from './SpatialSweepModal';
@@ -80,6 +82,19 @@ export function BentoDashboard() {
   }, [activeAssets, selectedAssetId]);
 
   const selectedAsset = activeAssets.find((a) => a.assetId === selectedAssetId) ?? null;
+
+  const compoundYield = useCallback(async () => {
+    if (!account.walletClient || !account.address || !TEMI_VAULT_ADDRESS) return;
+    const hash = await account.walletClient.writeContract({
+      address: TEMI_VAULT_ADDRESS,
+      abi: temiVaultAbi,
+      functionName: 'compoundYield',
+      account: account.address,
+      chain: creditcoinTestnet,
+    });
+    await creditcoinPublicClient.waitForTransactionReceipt({ hash });
+    void vault.refresh();
+  }, [account.walletClient, account.address, vault]);
   const money = useCallback((wei: bigint) => formatAmount(wei, denomination), [denomination]);
 
   return (
@@ -130,6 +145,7 @@ export function BentoDashboard() {
             connected={account.connected}
             onDeposit={() => requireAccount('Fund your reserve', () => setDepositOpen(true))}
             onWithdraw={() => requireAccount('Withdraw from Tier 1', () => setWithdrawOpen(true))}
+            onCompound={() => requireAccount('Compound your yield', () => void compoundYield())}
           />
 
           <IncidentTile
@@ -303,6 +319,7 @@ function ReserveTile({
   connected,
   onDeposit,
   onWithdraw,
+  onCompound,
   className,
 }: {
   vault: ReturnType<typeof useVault>;
@@ -311,6 +328,7 @@ function ReserveTile({
   connected: boolean;
   onDeposit: () => void;
   onWithdraw: () => void;
+  onCompound: () => void;
   className?: string;
 }) {
   const tier2Pool = vault.telemetry?.tier2Pool ?? 0n;
@@ -351,6 +369,43 @@ function ReserveTile({
               <span className="eyebrow">85% personal</span>
               <span className="eyebrow text-moss">15% mutual buffer</span>
             </div>
+          </div>
+
+          {/* Yield, stated with its fee attached. A spread a merchant finds out about later is
+              a spread they resent; showing it next to the number costs nothing. */}
+          <div className="mt-4 border-t border-hairline pt-3">
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="eyebrow">Yield earned</span>
+              <span className="tabular text-[13px] font-semibold text-moss">
+                {money(vault.revenue?.pendingYield ?? 0n)}
+              </span>
+            </div>
+            <p className="mt-1 text-[10px] leading-snug text-slate-soft">
+              {!vault.revenue ? (
+                <>
+                  This deployment predates the yield engine. Redeploy to enable it — the split is
+                  85% to you, 15% to the protocol, and never a cut of your principal.
+                </>
+              ) : vault.revenue.yieldStrategy !== ZERO_ADDRESS ? (
+                <>Float spread: 15% of yield only · your principal stays 100% unencumbered.</>
+              ) : (
+                <>
+                  No yield strategy connected. Creditcoin exposes no staking precompile to the
+                  EVM, so idle reserves are not deployed yet — when they are, the split is 85% to
+                  you, 15% to the protocol, and never a cut of your principal.
+                </>
+              )}
+            </p>
+            {vault.revenue && vault.revenue.pendingYield > 0n ? (
+              <Button
+                variant="outline"
+                block
+                className="mt-2 px-2 py-1.5 text-[11px]"
+                onClick={onCompound}
+              >
+                Compound into Tier 1
+              </Button>
+            ) : null}
           </div>
 
           <div className="mt-4 flex gap-2">
@@ -662,6 +717,26 @@ function AttestcoinConsole({
         <MetricRow label="Conduit backing" value={money(t?.conduitBacking ?? 0n)} />
         <MetricRow label="Claims settled" value={(t?.claimsSettled ?? 0n).toString()} />
         <MetricRow label="Value disbursed" value={money(t?.valueDisbursed ?? 0n)} tone="rust" />
+
+        <div className="my-2.5 h-px bg-hairline" />
+
+        <p className="eyebrow mb-1">Protocol revenue</p>
+        <MetricRow label="Settlement fee" value="1.5% of payout" tone="ochre" />
+        <MetricRow label="Yield spread" value="15% of yield" tone="ochre" />
+        <MetricRow
+          label="Fees collected"
+          value={vault.revenue ? money(vault.revenue.totalProtocolFees) : 'not on this deployment'}
+        />
+        <MetricRow label="Yield to operators" value={money(vault.revenue?.totalYieldDistributed ?? 0n)} tone="moss" />
+        <MetricRow
+          label="Yield strategy"
+          value={
+            vault.revenue && vault.revenue.yieldStrategy !== ZERO_ADDRESS
+              ? truncateAddress(vault.revenue.yieldStrategy, 8, 6)
+              : 'none connected'
+          }
+          tone={vault.revenue && vault.revenue.yieldStrategy !== ZERO_ADDRESS ? 'moss' : 'rust'}
+        />
 
         <div className="my-2.5 h-px bg-hairline" />
 

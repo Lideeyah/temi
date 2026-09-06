@@ -29,6 +29,7 @@ import {
 } from '@/lib/H3SpatialLock';
 import { formatTctc, parseTctc, shortAssetId, truncateHash } from '@/lib/format';
 import { Badge, Button, Field, MetricRow, Modal, Notice, Tabs, TextInput } from './ui/Primitives';
+import { ReserveSizingCard, computeSizing, HORIZONS } from './ReserveSizing';
 
 type TrackId = 'machinery' | 'property';
 
@@ -90,6 +91,8 @@ function useRegistration(onRegistered: () => void) {
       category: 0 | 1,
       declaredValue: bigint,
       h3CellIndex: bigint,
+      targetReserve: bigint,
+      horizonMonths: number,
     ) => {
       if (!walletClient || !account || !TEMI_VAULT_ADDRESS) return;
       setPending(true);
@@ -99,7 +102,7 @@ function useRegistration(onRegistered: () => void) {
           address: TEMI_VAULT_ADDRESS,
           abi: temiVaultAbi,
           functionName: 'registerAsset',
-          args: [assetId, category, declaredValue, h3CellIndex],
+          args: [assetId, category, declaredValue, h3CellIndex, targetReserve, BigInt(horizonMonths)],
           account,
           chain: creditcoinTestnet,
         });
@@ -183,6 +186,7 @@ function MachineryTrack({
   const [capture, setCapture] = useState<string | null>(null);
   const [serial, setSerial] = useState('');
   const [declared, setDeclared] = useState('2.5');
+  const [horizon, setHorizon] = useState<number>(HORIZONS.movable[0]);
   const { pending, error, result, submit } = useRegistration(onRegistered);
 
   const stopCamera = useCallback(() => {
@@ -280,11 +284,23 @@ function MachineryTrack({
 
       <ValueField value={declared} onChange={setDeclared} />
 
+      <ReserveSizingCard
+        declaredWei={wei}
+        category="movable"
+        horizonMonths={horizon}
+        onHorizonChange={setHorizon}
+      />
+
       {assetId ? (
         <div className="border border-hairline bg-paper-raised px-3.5 py-3">
           <p className="eyebrow mb-2">Derived identity</p>
           <MetricRow label="keccak256(serial)" value={shortAssetId(assetId)} title={assetId} />
           <MetricRow label="Category" value="MOVABLE_HARDWARE" tone="ochre" />
+          <MetricRow
+            label="Target reserve"
+            value={`${formatTctc(computeSizing(wei, 'movable', horizon).targetWei, 2)} tCTC`}
+            tone="moss"
+          />
         </div>
       ) : null}
 
@@ -294,10 +310,22 @@ function MachineryTrack({
       <Button
         block
         disabled={!ready || pending}
-        onClick={() => assetId && void submit(walletClient, account, assetId, 0, wei, 0n)}
+        onClick={() =>
+          assetId &&
+          void submit(
+            walletClient,
+            account,
+            assetId,
+            0,
+            wei,
+            0n,
+            computeSizing(wei, 'movable', horizon).targetWei,
+            horizon,
+          )
+        }
       >
         {pending ? <Loader2 size={14} className="animate-spin" /> : null}
-        {pending ? 'Registering…' : 'Register machinery'}
+        {pending ? 'Registering…' : 'Confirm & register machinery'}
       </Button>
     </div>
   );
@@ -321,6 +349,7 @@ function PropertyTrack({
   const [gpsError, setGpsError] = useState<{ title: string; detail?: string } | null>(null);
   const [meter, setMeter] = useState('');
   const [declared, setDeclared] = useState('5.0');
+  const [horizon, setHorizon] = useState<number>(HORIZONS.property[0]);
   const { pending, error, result, submit } = useRegistration(onRegistered);
 
   const locate = useCallback(async () => {
@@ -407,6 +436,13 @@ function PropertyTrack({
 
       <ValueField value={declared} onChange={setDeclared} />
 
+      <ReserveSizingCard
+        declaredWei={wei}
+        category="property"
+        horizonMonths={horizon}
+        onHorizonChange={setHorizon}
+      />
+
       {assetId && fix ? (
         <div className="border border-hairline bg-paper-raised px-3.5 py-3">
           <p className="eyebrow mb-2">Derived identity</p>
@@ -422,10 +458,23 @@ function PropertyTrack({
       <Button
         block
         disabled={!ready || pending}
-        onClick={() => assetId && fix && void submit(walletClient, account, assetId, 1, wei, fix.h3CellIndex)}
+        onClick={() =>
+          assetId &&
+          fix &&
+          void submit(
+            walletClient,
+            account,
+            assetId,
+            1,
+            wei,
+            fix.h3CellIndex,
+            computeSizing(wei, 'property', horizon).targetWei,
+            horizon,
+          )
+        }
       >
         {pending ? <Loader2 size={14} className="animate-spin" /> : null}
-        {pending ? 'Registering…' : 'Register property'}
+        {pending ? 'Registering…' : 'Confirm & register property'}
       </Button>
     </div>
   );
