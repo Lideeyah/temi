@@ -139,20 +139,51 @@ is enough to prove someone is standing at their own stall and not enough to trac
 
 ## Opening an account
 
-A market trader has no extension and has never seen a seed phrase. The default path does not ask
-them to connect a wallet — it provisions one. They give a business name, touch the fingerprint
-sensor, and a key is generated in the browser and encrypted with a secret derived from a WebAuthn
-passkey via the PRF extension. Gas is sponsored, so they never learn that gas exists.
+A merchant verifies their phone number, then chooses a 4-digit PIN. Those two things *are* the
+vault — the account is derived, not generated, so the same number and PIN reproduce the same
+address on any handset. Nothing to write down, nothing to lose, and no fingerprint sensor
+required, which matters on the phones this product is actually for.
 
-Where PRF is unsupported the key falls back to IndexedDB behind a passkey *presence* check, and
-the UI says so explicitly rather than implying uniform security.
+### Why the PIN is not salted with the phone number alone
 
-A second, deliberately quiet path connects an injected EVM wallet so a reviewer can drive the same
-contracts from a funded account. Both produce a viem wallet client and an address, so everything
-downstream is one code path.
+The obvious derivation is `PBKDF2(PIN, salt = phone)`. It does not survive contact with an
+attacker. A salt is public by design and a trader's number is on their shop sign, so the whole key
+rests on four digits:
 
-Not account abstraction: no smart account, no session keys, no recovery, and sponsorship is a
-rate-limited drip rather than a paymaster. Losing the phone loses the vault.
+```
+Exhausting the ENTIRE 4-digit PIN space against a known phone number
+  candidates tried : 10,000
+  wall clock       : 77.1 seconds   (single core, unoptimised)
+```
+
+Derive all 10,000 candidate addresses, find the funded one, drain it. So a second input is
+required — a high-entropy share held server-side and released only after the number is verified:
+
+```
+privateKey = PBKDF2-SHA256(PIN, salt = serverShare ‖ phone ‖ "temi:cc3:vault", 600_000)
+```
+
+Neither half suffices. The server never receives the PIN and cannot derive a merchant's key even
+from its own database; an attacker holding the phone number has nothing to grind against.
+
+**What this does not fix:** someone with the unlocked handset can still try 10,000 PINs against
+the local ciphertext — about 15 minutes. No KDF makes four digits strong. So the defence is the one
+a SIM card uses: after 10 wrong PINs the local share is destroyed and the vault can only be reached
+by re-verifying the number over SMS. Nothing is lost, because the key is derived rather than
+stored.
+
+In production the pepper belongs in an HSM, the codes go over real SMS, and rate limiting must
+survive a restart. `lib/otpStore.ts` is explicit about being the demo-grade version of all three.
+
+
+
+Biometric unlock is offered as an opt-in convenience on devices that have it, never as a
+requirement. A second, deliberately quiet path connects an injected EVM wallet so a reviewer can
+drive the same contracts from a funded account. All paths produce a viem wallet client and an
+address, so everything downstream is one code path.
+
+Not account abstraction: no smart account, no session keys, and sponsorship is a rate-limited drip
+rather than a paymaster.
 
 ## Protocol revenue
 

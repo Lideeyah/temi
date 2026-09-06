@@ -4,16 +4,15 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createWalletClient, custom, http, type Address, type WalletClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { creditcoinTestnet } from '@/lib/chains';
+import { isPlatformAuthenticatorAvailable } from '@/lib/MerchantAccount';
 import {
-  MerchantError,
-  createMerchantAccount,
-  describeProtection,
-  forgetMerchantAccount,
-  isPlatformAuthenticatorAvailable,
-  loadMerchantRecord,
-  unlockMerchantAccount,
-  type MerchantRecord,
-} from '@/lib/MerchantAccount';
+  IdentityError,
+  createIdentity,
+  forgetIdentity,
+  loadIdentity,
+  unlockIdentity,
+  type IdentityRecord,
+} from '@/lib/MerchantIdentity';
 import { useWallet } from './useWallet';
 
 export type AccountKind = 'merchant' | 'injected';
@@ -35,7 +34,7 @@ export interface SponsorResult {
 export function useMerchantAccount() {
   const injected = useWallet();
 
-  const [record, setRecord] = useState<MerchantRecord | null>(null);
+  const [record, setRecord] = useState<IdentityRecord | null>(null);
   const [privateKey, setPrivateKey] = useState<`0x${string}` | null>(null);
   const [biometricAvailable, setBiometricAvailable] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -43,7 +42,7 @@ export function useMerchantAccount() {
   const [sponsorship, setSponsorship] = useState<SponsorResult | null>(null);
 
   useEffect(() => {
-    void loadMerchantRecord().then(setRecord);
+    void loadIdentity().then(setRecord);
     void isPlatformAuthenticatorAvailable().then(setBiometricAvailable);
   }, []);
 
@@ -62,34 +61,69 @@ export function useMerchantAccount() {
     }
   }, []);
 
-  const openMerchantVault = useCallback(
-    async (label: string, profile?: { regionId?: string; phoneE164?: string }) => {
+  /**
+   * Create the vault from a verified number and a chosen PIN.
+   *
+   * The key is derived, never generated: the same number and PIN reproduce the same account on
+   * any device, which is what makes losing a handset survivable.
+   */
+  const createVault = useCallback(
+    async (params: {
+      pin: string;
+      phoneE164: string;
+      keyShare: string;
+      regionId: string;
+      businessName: string;
+      biometricEnabled: boolean;
+    }) => {
       setBusy(true);
       setError(null);
       try {
-        const existing = record ?? (await loadMerchantRecord());
-        const active = existing ?? (await createMerchantAccount(label.trim() || 'My business', profile));
-        setRecord(active);
-
-        const key = await unlockMerchantAccount(active);
+        const { record: created, privateKey: key } = await createIdentity(params);
+        setRecord(created);
         setPrivateKey(key);
-
-        // A new account has no gas. Cover it before the merchant hits a wall they cannot parse.
-        if (!existing) await requestSponsorship(active.address);
+        await requestSponsorship(created.address);
       } catch (cause) {
-        const merchantError = cause as MerchantError;
-        setError({ title: merchantError.message, detail: merchantError.detail });
+        const identityError = cause as IdentityError;
+        setError({ title: identityError.message, detail: identityError.detail });
       } finally {
         setBusy(false);
       }
     },
-    [record, requestSponsorship],
+    [requestSponsorship],
+  );
+
+  /** Re-derive the account for an existing vault on this device. */
+  const unlockWithPin = useCallback(
+    async (pin: string): Promise<boolean> => {
+      const active = record ?? (await loadIdentity());
+      if (!active) {
+        setError({ title: 'No vault on this device' });
+        return false;
+      }
+      setBusy(true);
+      setError(null);
+      try {
+        const key = await unlockIdentity(active, pin);
+        setRecord(active);
+        setPrivateKey(key);
+        return true;
+      } catch (cause) {
+        const identityError = cause as IdentityError;
+        setError({ title: identityError.message, detail: identityError.detail });
+        if (identityError.code === 'ERR_PIN_LOCKED') setRecord(null);
+        return false;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [record],
   );
 
   const lock = useCallback(() => setPrivateKey(null), []);
 
   const forget = useCallback(async () => {
-    await forgetMerchantAccount();
+    await forgetIdentity();
     setRecord(null);
     setPrivateKey(null);
     setSponsorship(null);
@@ -133,9 +167,9 @@ export function useMerchantAccount() {
     record,
     unlocked: privateKey !== null,
     biometricAvailable,
-    protection: record ? describeProtection(record.protection) : null,
     sponsorship,
-    openMerchantVault,
+    createVault,
+    unlockWithPin,
     lock,
     forget,
 

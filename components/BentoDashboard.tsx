@@ -49,6 +49,7 @@ import { HeroStats } from './HeroStats';
 import { useRegion } from './RegionProvider';
 import { PendingClaimsCard } from './PendingClaimsCard';
 import { AccountDrawer, AccountPill } from './AccountDrawer';
+import { PinPrompt } from './PinSetup';
 import { VaultSetup, UninitializedBadge } from './VaultSetup';
 import { Badge, Button, MetricRow, Modal, Notice, StatusDot, TextInput } from './ui/Primitives';
 
@@ -60,12 +61,21 @@ export function BentoDashboard() {
   // A merchant who taps "Report loss" without an account should be taken through provisioning,
   // not left staring at a disabled button wondering what they did wrong.
   const [accountDrawer, setAccountDrawer] = useState<string | null>(null);
+  /** A queued action waiting on the PIN, so signing resumes exactly where it left off. */
+  const [pinPrompt, setPinPrompt] = useState<{ action: string; run: () => void } | null>(null);
+
   const requireAccount = useCallback(
     (reason: string, action: () => void) => {
-      if (account.connected) action();
+      if (account.connected) {
+        action();
+        return;
+      }
+      // A vault exists on this device but the key is not in memory — ask for the PIN rather than
+      // sending them back through onboarding they have already completed.
+      if (account.record) setPinPrompt({ action: reason, run: action });
       else setAccountDrawer(reason);
     },
-    [account.connected],
+    [account.connected, account.record],
   );
 
   const [depositOpen, setDepositOpen] = useState(false);
@@ -199,11 +209,8 @@ export function BentoDashboard() {
               busy={initialising || account.busy}
               biometricAvailable={account.biometricAvailable}
               accountError={account.error}
-              onProvision={(profile) =>
-                void account.openMerchantVault(profile.businessName, {
-                  regionId: region.id,
-                  phoneE164: profile.phoneE164,
-                })
+              onCreateVault={(params) =>
+                void account.createVault({ ...params, regionId: region.id })
               }
               onUseWallet={() => setAccountDrawer('Connect a Web3 wallet')}
               onInitialize={(monthly) => void initializeVault(monthly)}
@@ -256,6 +263,23 @@ export function BentoDashboard() {
       </main>
 
       <StatusBar />
+
+      <PinPrompt
+        open={pinPrompt !== null}
+        action={pinPrompt?.action ?? ''}
+        busy={account.busy}
+        error={account.error?.title ?? null}
+        onCancel={() => setPinPrompt(null)}
+        onSubmit={(pin) => {
+          void account.unlockWithPin(pin).then((ok) => {
+            if (!ok) return;
+            const queued = pinPrompt?.run;
+            setPinPrompt(null);
+            // Let the unlocked signer land in state before the queued action reads it.
+            setTimeout(() => queued?.(), 0);
+          });
+        }}
+      />
 
       <AccountDrawer
         open={accountDrawer !== null}

@@ -1,19 +1,12 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import {
-  Fingerprint,
-  Loader2,
-  LogOut,
-  ShieldCheck,
-  Store,
-  TriangleAlert,
-  Wallet,
-} from 'lucide-react';
+import { Fingerprint, KeyRound, Loader2, LogOut, ShieldCheck, Store, Wallet } from 'lucide-react';
 import { creditcoinTestnet, blockscoutAddress } from '@/lib/chains';
 import { truncateAddress } from '@/lib/format';
 import type { useMerchantAccount } from '@/hooks/useMerchantAccount';
-import { Badge, Button, Field, Modal, Notice, Tabs, TextInput } from './ui/Primitives';
+import { Badge, Button, Modal, Notice, Tabs } from './ui/Primitives';
+import { PinField } from './PinPad';
 
 type TabId = 'merchant' | 'wallet';
 
@@ -38,7 +31,7 @@ export function AccountDrawer({
   reason?: string;
 }) {
   const [tab, setTab] = useState<TabId>('merchant');
-  const [label, setLabel] = useState('');
+  const [pin, setPin] = useState('');
 
   // Close as soon as an account is live — nobody wants to dismiss a dialog they are done with.
   useEffect(() => {
@@ -65,84 +58,66 @@ export function AccountDrawer({
       </div>
 
       {tab === 'merchant' ? (
-        <div className="space-y-4">
-          <div className="flex items-start gap-2.5">
-            <Store size={15} className="mt-[2px] shrink-0 text-slate-soft" strokeWidth={1.75} />
-            <p className="text-[12.5px] leading-relaxed text-slate-strong">
-              Your vault opens with your business name and the fingerprint you already use to
-              unlock this phone. There is no seed phrase to write down and nothing to install.
-            </p>
-          </div>
-
-          {account.record ? (
+        account.record ? (
+          <div className="space-y-4">
             <div className="border border-hairline bg-paper-raised px-3.5 py-3">
-              <p className="eyebrow mb-1.5">Existing vault on this device</p>
-              <p className="tabular text-[12px] font-medium text-ink">{account.record.label}</p>
+              <p className="eyebrow mb-1">Vault on this device</p>
+              <p className="text-[12.5px] font-medium text-ink">{account.record.businessName}</p>
               <p className="tabular mt-0.5 text-[10.5px] text-slate-soft">
-                {truncateAddress(account.record.address)}
+                {account.record.phoneE164} · {truncateAddress(account.record.address)}
               </p>
             </div>
-          ) : (
-            <Field
-              label="Business name"
-              hint="Shown on your phone's passkey prompt so you recognise it later."
+
+            <PinField
+              label="Enter your 4-digit PIN"
+              value={pin}
+              onChange={setPin}
+              onComplete={(value) => void account.unlockWithPin(value)}
+              invalid={Boolean(account.error)}
+              autoFocus
+            />
+
+            {account.error ? (
+              <Notice tone="rust" title={account.error.title}>{account.error.detail}</Notice>
+            ) : null}
+
+            <Button
+              block
+              disabled={pin.length !== 4 || account.busy}
+              onClick={() => void account.unlockWithPin(pin)}
             >
-              <TextInput
-                mono={false}
-                value={label}
-                onChange={(event) => setLabel(event.target.value)}
-                placeholder="e.g. Adeola Electronics, Balogun"
-                autoFocus
-              />
-            </Field>
-          )}
+              {account.busy ? <Loader2 size={14} className="animate-spin" /> : <KeyRound size={14} strokeWidth={1.75} />}
+              {account.busy ? 'Unlocking…' : 'Unlock my vault'}
+            </Button>
 
-          {/* Once an account exists, report the protection it ACTUALLY got. Whether the
-              authenticator supports key derivation is only knowable after the fact, and
-              promising biometric encryption to someone who did not receive it is the kind of
-              claim that matters most to the person least able to check it. */}
-          {account.protection ? (
-            <Notice
-              tone={account.protection.strong ? 'moss' : 'ochre'}
-              title={account.protection.title}
-              icon={account.protection.strong ? <Fingerprint size={12} /> : <TriangleAlert size={12} />}
+            <button
+              onClick={() => void account.forget()}
+              className="focus-ring w-full text-center text-[10.5px] text-slate-soft underline underline-offset-2"
             >
-              {account.protection.detail}
-            </Notice>
-          ) : account.biometricAvailable ? (
-            <Notice tone="neutral" title="This device has a biometric sensor" icon={<Fingerprint size={12} />}>
-              Your vault will ask for it. If this browser also supports deriving a key from that
-              biometric, your account key is encrypted with it — Tèmi will tell you which
-              protection you ended up with once the vault exists.
-            </Notice>
-          ) : (
-            <Notice tone="ochre" title="No biometric sensor detected" icon={<TriangleAlert size={12} />}>
-              Your vault will still open, but the key will sit on this device behind a passkey
-              check rather than encrypted by your fingerprint. Prefer a phone for real use.
-            </Notice>
-          )}
+              Restore a different vault on this device
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex items-start gap-2.5">
+              <Store size={15} className="mt-[2px] shrink-0 text-slate-soft" strokeWidth={1.75} />
+              <p className="text-[12.5px] leading-relaxed text-slate-strong">
+                Your vault opens with your mobile number and a 4-digit PIN. No seed phrase, no
+                extension, and it works on any phone — a fingerprint sensor is optional, not
+                required.
+              </p>
+            </div>
 
-          {account.error ? (
-            <Notice tone="rust" title={account.error.title}>{account.error.detail}</Notice>
-          ) : null}
+            <Notice tone="neutral" title="Set up takes about a minute" icon={<ShieldCheck size={12} />}>
+              Verify your number, choose a PIN, and your vault exists. The same number and PIN
+              restore it on any handset, so there is nothing to lose.
+            </Notice>
 
-          <Button
-            block
-            disabled={account.busy || (!account.record && !label.trim())}
-            onClick={() => void account.openMerchantVault(label)}
-          >
-            {account.busy ? <Loader2 size={14} className="animate-spin" /> : <Fingerprint size={14} strokeWidth={1.75} />}
-            {account.busy
-              ? 'Waiting for your fingerprint…'
-              : account.record
-                ? 'Unlock my vault'
-                : 'Create my vault'}
-          </Button>
-
-          <p className="text-center text-[10px] leading-relaxed text-slate-soft">
-            Gas on cc3-testnet is covered for you. You never need to hold a token to file a claim.
-          </p>
-        </div>
+            <Button block onClick={onClose}>
+              Continue to set-up
+            </Button>
+          </div>
+        )
       ) : (
         <div className="space-y-4">
           <div className="flex items-start gap-2.5">
@@ -248,21 +223,20 @@ export function AccountPill({
               {account.kind === 'merchant' ? 'Merchant vault' : 'Injected wallet'}
             </p>
 
-            {account.kind === 'merchant' && account.protection ? (
+            {account.kind === 'merchant' && account.record ? (
               <div className="mb-2.5">
                 <div className="mb-1 flex items-center gap-1.5">
-                  <ShieldCheck
-                    size={11}
-                    className={account.protection.strong ? 'text-moss' : 'text-ochre'}
-                    strokeWidth={2}
-                  />
-                  <span
-                    className={`text-[10.5px] font-medium ${account.protection.strong ? 'text-moss' : 'text-ochre'}`}
-                  >
-                    {account.protection.title}
+                  <ShieldCheck size={11} className="text-moss" strokeWidth={2} />
+                  <span className="text-[10.5px] font-medium text-moss">
+                    Secured by your number and PIN
                   </span>
                 </div>
-                <p className="text-[10px] leading-snug text-slate-soft">{account.protection.detail}</p>
+                <p className="tabular text-[10px] leading-snug text-slate-soft">
+                  {account.record.phoneE164}
+                </p>
+                <p className="mt-0.5 text-[10px] leading-snug text-slate-soft">
+                  Restorable on any phone with the same number and PIN.
+                </p>
               </div>
             ) : null}
 

@@ -7,7 +7,9 @@ import { formatTctc } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { useRegion } from './RegionProvider';
 import { ReserveSizingCard, computeSizing, HORIZONS } from './ReserveSizing';
-import { MerchantProfileStage, StageRail } from './MerchantProfileStage';
+import { StageRail } from './MerchantProfileStage';
+import { PhoneVerification } from './PhoneVerification';
+import { PinSetup } from './PinSetup';
 import { Badge, Notice } from './ui/Primitives';
 
 /**
@@ -27,7 +29,7 @@ export function VaultSetup({
   busy,
   biometricAvailable,
   accountError,
-  onProvision,
+  onCreateVault,
   onUseWallet,
   onInitialize,
   rateLine,
@@ -36,9 +38,15 @@ export function VaultSetup({
   busy: boolean;
   biometricAvailable: boolean;
   accountError: { title: string; detail?: string } | null;
-  /** Stage 0 — provision the merchant's account from their declared profile. */
-  onProvision: (profile: { businessName: string; phoneE164: string }) => void;
-  /** Escape hatch when a passkey prompt never appears. */
+  /** Stage 0c — create the vault once the number is verified and a PIN chosen. */
+  onCreateVault: (params: {
+    pin: string;
+    phoneE164: string;
+    keyShare: string;
+    businessName: string;
+    biometricEnabled: boolean;
+  }) => void;
+  /** Escape hatch to a conventional wallet. */
   onUseWallet: () => void;
   /** Stage 2 — fund the first allocation, in wei of tCTC. */
   onInitialize: (monthlyWei: bigint) => void;
@@ -63,8 +71,11 @@ export function VaultSetup({
 
   const declaredWei = useMemo(() => fiatToWei(parseFiat(raw), region), [raw, region]);
 
-  // The account exists once they are connected; sizing is stage 1, funding stage 2.
-  const stage: 0 | 1 | 2 = !connected ? 0 : 1;
+  // Phase 1 hands back the verified number and the server's half of the key.
+  const [verified, setVerified] = useState<{ phoneE164: string; keyShare: string } | null>(null);
+  const [businessName, setBusinessName] = useState('');
+
+  const stage: 0 | 1 | 2 = connected ? 1 : 0;
 
   const sizing = useMemo(
     () => computeSizing(declaredWei, category, horizon),
@@ -93,15 +104,39 @@ export function VaultSetup({
       <StageRail stage={stage} />
 
       {stage === 0 ? (
-        <MerchantProfileStage
-          region={region}
-          onRegionChange={changeRegion}
-          busy={busy}
-          biometricAvailable={biometricAvailable}
-          error={accountError}
-          onProvision={onProvision}
-          onUseWallet={onUseWallet}
-        />
+        !verified ? (
+          <PhoneVerification
+            region={region}
+            onRegionChange={changeRegion}
+            onVerified={setVerified}
+          />
+        ) : (
+          <div className="space-y-4">
+            <PinSetup
+              businessName={businessName}
+              onBusinessNameChange={setBusinessName}
+              phoneE164={verified.phoneE164}
+              biometricAvailable={biometricAvailable}
+              busy={busy}
+              error={accountError}
+              onConfirm={({ pin, biometricEnabled }) =>
+                onCreateVault({
+                  pin,
+                  phoneE164: verified.phoneE164,
+                  keyShare: verified.keyShare,
+                  businessName,
+                  biometricEnabled,
+                })
+              }
+            />
+            <button
+              onClick={onUseWallet}
+              className="focus-ring w-full text-center text-[10.5px] text-slate-soft underline underline-offset-2"
+            >
+              Use a Web3 wallet instead
+            </button>
+          </div>
+        )
       ) : (
       <>
       <div className="grid gap-5 lg:grid-cols-2">
