@@ -12,10 +12,15 @@ import {EvmTxDecoder} from "./EvmTxDecoder.sol";
 ///         withdrawable at any moment, which is the structural difference from insurance.
 ///
 ///         Reserves can be funded three ways, all of which land in the same 85/15 accounting:
-///           1. `depositReserve()`        — native tCTC on Creditcoin.
-///           2. `depositViaAttestcoin()`  — capital deposited on Ethereum Sepolia, proven to
-///                                          Creditcoin by the Attestcoin Native Query Verifier.
-///           3. the NIBSS virtual-account relayer, which is just path 1 with a different payer.
+///           1. `depositReserve()`     — native tCTC on Creditcoin.
+///           2. `verifyAndDeposit()`   — capital deposited on Ethereum Sepolia, *read* into
+///                                       Creditcoin through the Attestcoin verify precompile.
+///           3. the Trugi NGN virtual-account relayer, which is path 1 with a different payer.
+///
+///         On (2), Tèmi is an Attestcoin Smart Contract operating strictly within the protocol's
+///         readability scope: Creditcoin attestors watch Ethereum Sepolia, reach quorum, and post
+///         an attestation on Creditcoin; this contract then reads that state by verifying an
+///         inclusion proof. Nothing is ever written back to Sepolia, and reads cost no ATC.
 ///
 ///         Claims are settled against hardware attestation produced in the operator's browser:
 ///         accelerometer tremor, motion parallax, and (for fixed property) an H3 spatial lock.
@@ -55,9 +60,12 @@ contract TemiVault {
     INativeQueryVerifier public constant ATTESTCOIN_VERIFIER =
         INativeQueryVerifier(0x0000000000000000000000000000000000000FD2);
 
-    /// @notice topic0 of `TemiSourcePortal.CrossChainReserveDeposit(address,uint256,uint256)`.
-    bytes32 public constant CROSS_CHAIN_DEPOSIT_TOPIC =
-        keccak256("CrossChainReserveDeposit(address,uint256,uint256)");
+    /// @notice topic0 of `TemiSourcePortal.ReserveFunded(address,uint256,bytes32)`.
+    bytes32 public constant RESERVE_FUNDED_TOPIC =
+        keccak256("ReserveFunded(address,uint256,bytes32)");
+
+    /// @notice Attestcoin chain key for Ethereum Sepolia on cc3-testnet.
+    uint64 public constant CHAIN_KEY_ETHEREUM_SEPOLIA = 1;
 
     /// @notice Attestcoin chain keys the vault will accept proofs from, mapped to the portal
     ///         address that is authoritative on that chain. cc3-testnet supports key 1
@@ -69,8 +77,8 @@ contract TemiVault {
     ///         so a proof cannot be reused even if the caller relabels the tx hash.
     mapping(bytes32 => bool) public consumedAttestation;
 
-    /// @notice Secondary replay guard on the operator-supplied source tx hash label.
-    mapping(bytes32 => bool) public consumedExternalTxHash;
+    /// @notice Replay guard on the Sepolia transaction hash. A funded deposit is credited once.
+    mapping(bytes32 => bool) public processedTxHashes;
 
     /// @notice tCTC held to back cross-chain credits. Value deposited on Ethereum Sepolia does
     ///         not physically arrive on Creditcoin, so a cross-chain credit is only honoured
@@ -135,15 +143,19 @@ contract TemiVault {
         uint256 poolBalance
     );
 
-    event CrossChainReserveVerified(
+    /// @notice Canonical receipt of a successful Attestcoin read.
+    event AttestcoinReserveCredited(bytes32 indexed sepTxHash, uint256 amount);
+
+    /// @notice Full provenance of the cross-chain read, for the telemetry console.
+    event AttestcoinProofVerified(
         address indexed operator,
         uint64 indexed chainKey,
         uint64 indexed sourceHeight,
-        bytes32 externalTxHash,
+        bytes32 sepTxHash,
         bytes32 attestationKey,
         address sourcePortal,
-        uint256 amount,
-        uint256 targetAssetId
+        address depositor,
+        uint256 amount
     );
 
     event ConduitLiquidityFunded(address indexed underwriter, uint256 amount, uint256 available);
@@ -193,7 +205,7 @@ contract TemiVault {
     error UntrustedSourceChain(uint64 chainKey);
     error AttestationAlreadyConsumed(bytes32 key);
     error AttestcoinVerificationFailed();
-    error DepositLogNotFound(address expectedPortal);
+    error ReserveFundedLogNotFound(address expectedPortal);
     error AmountMismatch(uint256 declared, uint256 attested);
     error InsufficientConduitBacking(uint256 requested, uint256 available);
     error NotTreasury();
@@ -229,35 +241,38 @@ contract TemiVault {
     /*              ATTESTCOIN CROSS-CHAIN RESERVE INTAKE                  */
     /* ------------------------------------------------------------------ */
 
-    /// @notice Credit a Tèmi reserve from capital that was deposited on an external EVM chain,
-    ///         proven to Creditcoin by the Attestcoin Native Query Verifier precompile.
+    /// @notice Credit a Tèmi reserve from capital deposited on Ethereum Sepolia, by *reading*
+    ///         that deposit through the Attestcoin verify precompile.
     ///
-    /// @dev    This is a genuine Attestcoin Smart Contract path, not a name-check. In one
-    ///         Creditcoin transaction it:
+    /// @dev    This is a genuine Attestcoin Smart Contract path within the protocol's readability
+    ///         scope, not a name-check. In one Creditcoin transaction it:
     ///           1. decodes the caller-supplied proof bundle,
-    ///           2. calls `verifyAndEmit` on the 0x0FD2 precompile, which checks the Merkle
-    ///              inclusion proof against the source block and the continuity proof against
-    ///              the attestor network's checkpoint chain — the call reverts if either fails,
+    ///           2. calls `verifyAndEmit` on the 0x0FD2 Block Prover precompile, which checks the
+    ///              Merkle inclusion proof against the source block and the continuity proof
+    ///              against the attestor quorum's checkpoint chain — the call reverts if either
+    ///              fails, so a forged proof can never reach the accounting below,
     ///           3. decodes the now-proven transaction payload and walks its receipt logs,
-    ///           4. requires a `CrossChainReserveDeposit` log emitted by the portal this vault
-    ///              trusts on that chain key, and
-    ///           5. credits the beneficiary named *inside the proven log* — never the caller.
+    ///           4. requires a `ReserveFunded` log emitted by the portal this vault trusts on
+    ///              that chain key, and
+    ///           5. credits the operator named *inside the proven log* — never the caller.
     ///
-    ///         Because the beneficiary comes from the attested log rather than from calldata,
-    ///         a third-party relayer can submit the proof without being able to redirect funds.
+    ///         Because the beneficiary is read out of the attested log rather than taken from
+    ///         calldata, any relayer can submit the proof without being able to redirect funds.
+    ///         Reading attested state consumes no ATC; the caller pays only Creditcoin gas.
     ///
-    /// @param proofData       abi.encode(uint64 chainKey, uint64 height, bytes encodedTransaction,
-    ///                        INativeQueryVerifier.MerkleProof, INativeQueryVerifier.ContinuityProof)
-    ///                        exactly as returned by the Creditcoin proof builder API.
-    /// @param externalTxHash  The source-chain transaction hash, used as a human-readable label
-    ///                        and as a secondary replay guard.
-    /// @param amount          The amount the submitter expects to be credited. Checked against
-    ///                        the attested log; a mismatch reverts rather than silently adjusting.
-    function depositViaAttestcoin(
-        bytes calldata proofData,
-        bytes32 externalTxHash,
+    /// @param proof     abi.encode(uint64 chainKey, uint64 height, bytes encodedTransaction,
+    ///                  INativeQueryVerifier.MerkleProof, INativeQueryVerifier.ContinuityProof)
+    ///                  exactly as returned by the Creditcoin proof builder API.
+    /// @param sepTxHash The Ethereum Sepolia transaction hash, used as the replay key.
+    /// @param amount    The amount the submitter expects to be credited. Checked against the
+    ///                  attested log; a mismatch reverts rather than silently adjusting.
+    function verifyAndDeposit(
+        bytes calldata proof,
+        bytes32 sepTxHash,
         uint256 amount
-    ) external returns (address beneficiary, uint256 credited) {
+    ) external returns (address operator, uint256 credited) {
+        if (processedTxHashes[sepTxHash]) revert AttestationAlreadyConsumed(sepTxHash);
+
         (
             uint64 chainKey,
             uint64 height,
@@ -265,19 +280,19 @@ contract TemiVault {
             INativeQueryVerifier.MerkleProof memory merkleProof,
             INativeQueryVerifier.ContinuityProof memory continuityProof
         ) = abi.decode(
-            proofData,
+            proof,
             (uint64, uint64, bytes, INativeQueryVerifier.MerkleProof, INativeQueryVerifier.ContinuityProof)
         );
 
         address portal = trustedSourcePortal[chainKey];
         if (portal == address(0)) revert UntrustedSourceChain(chainKey);
 
-        // Bind the replay guard to the exact bytes the precompile is about to verify.
+        // Second replay guard, bound to the exact bytes the precompile is about to verify.
+        // `sepTxHash` is an operator-supplied label; this one is a commitment to the payload.
         bytes32 attestationKey = keccak256(encodedTransaction);
         if (consumedAttestation[attestationKey]) revert AttestationAlreadyConsumed(attestationKey);
-        if (consumedExternalTxHash[externalTxHash]) revert AttestationAlreadyConsumed(externalTxHash);
 
-        // ---- Attestcoin verification. Reverts inside the precompile on a bad proof. ----
+        // ---- Attestcoin readability. The precompile reverts on a bad proof. ----
         bool verified = ATTESTCOIN_VERIFIER.verifyAndEmit(
             chainKey,
             height,
@@ -290,61 +305,66 @@ contract TemiVault {
         // ---- The payload is now proven. Read the deposit out of its receipt logs. ----
         (, EvmTxDecoder.EvmLog[] memory logs) = EvmTxDecoder.decode(encodedTransaction);
 
+        address depositor;
         uint256 attestedAmount;
-        uint256 targetAssetId;
         bool found;
         for (uint256 i = 0; i < logs.length; i++) {
-            EvmTxDecoder.EvmLog memory log = logs[i];
-            if (log.emitter != portal) continue;
-            if (log.topics.length != 2) continue;
-            if (log.topics[0] != CROSS_CHAIN_DEPOSIT_TOPIC) continue;
+            EvmTxDecoder.EvmLog memory entry = logs[i];
+            if (entry.emitter != portal) continue;
+            // ReserveFunded indexes both `depositor` and `vaultTarget`, so topic0 + 2 = 3.
+            if (entry.topics.length != 3) continue;
+            if (entry.topics[0] != RESERVE_FUNDED_TOPIC) continue;
 
-            beneficiary = address(uint160(uint256(log.topics[1])));
-            (attestedAmount, targetAssetId) = abi.decode(log.data, (uint256, uint256));
+            depositor = address(uint160(uint256(entry.topics[1])));
+            // vaultTarget names the Creditcoin operator; zero means "credit the depositor".
+            operator = address(uint160(uint256(entry.topics[2])));
+            if (operator == address(0)) operator = depositor;
+            attestedAmount = abi.decode(entry.data, (uint256));
             found = true;
             break;
         }
-        if (!found) revert DepositLogNotFound(portal);
+        if (!found) revert ReserveFundedLogNotFound(portal);
         if (amount != attestedAmount) revert AmountMismatch(amount, attestedAmount);
         if (attestedAmount > conduitBackingAvailable) {
             revert InsufficientConduitBacking(attestedAmount, conduitBackingAvailable);
         }
 
+        processedTxHashes[sepTxHash] = true;
         consumedAttestation[attestationKey] = true;
-        consumedExternalTxHash[externalTxHash] = true;
         conduitBackingAvailable -= attestedAmount;
         crossChainDepositsVerified += 1;
         crossChainValueVerified += attestedAmount;
         lastVerifiedSourceHeight = height;
         lastVerifiedChainKey = chainKey;
 
-        emit CrossChainReserveVerified(
-            beneficiary,
+        emit AttestcoinProofVerified(
+            operator,
             chainKey,
             height,
-            externalTxHash,
+            sepTxHash,
             attestationKey,
             portal,
-            attestedAmount,
-            targetAssetId
+            depositor,
+            attestedAmount
         );
+        emit AttestcoinReserveCredited(sepTxHash, attestedAmount);
 
-        _creditReserve(beneficiary, attestedAmount);
+        _creditReserve(operator, attestedAmount);
         credited = attestedAmount;
     }
 
-    /// @notice Read-only dry run of a proof bundle. Uses the precompile's `view` overload so a
-    ///         wallet can tell the operator whether a proof will land before they pay gas.
-    function previewAttestcoinProof(bytes calldata proofData)
+    /// @notice Read-only dry run of a proof bundle. Uses the precompile's `view` overload so the
+    ///         UI can tell an operator whether a proof will land before they spend gas on it.
+    function previewAttestcoinProof(bytes calldata proof)
         external
         view
-        returns (bool proofValid, address beneficiary, uint256 attestedAmount, uint64 chainKey, uint64 height)
+        returns (bool proofValid, address operator, uint256 attestedAmount, uint64 chainKey, uint64 height)
     {
         bytes memory encodedTransaction;
         INativeQueryVerifier.MerkleProof memory merkleProof;
         INativeQueryVerifier.ContinuityProof memory continuityProof;
         (chainKey, height, encodedTransaction, merkleProof, continuityProof) = abi.decode(
-            proofData,
+            proof,
             (uint64, uint64, bytes, INativeQueryVerifier.MerkleProof, INativeQueryVerifier.ContinuityProof)
         );
 
@@ -360,10 +380,11 @@ contract TemiVault {
         (, EvmTxDecoder.EvmLog[] memory logs) = EvmTxDecoder.decode(encodedTransaction);
         for (uint256 i = 0; i < logs.length; i++) {
             if (logs[i].emitter != portal) continue;
-            if (logs[i].topics.length != 2) continue;
-            if (logs[i].topics[0] != CROSS_CHAIN_DEPOSIT_TOPIC) continue;
-            beneficiary = address(uint160(uint256(logs[i].topics[1])));
-            (attestedAmount, ) = abi.decode(logs[i].data, (uint256, uint256));
+            if (logs[i].topics.length != 3) continue;
+            if (logs[i].topics[0] != RESERVE_FUNDED_TOPIC) continue;
+            operator = address(uint160(uint256(logs[i].topics[2])));
+            if (operator == address(0)) operator = address(uint160(uint256(logs[i].topics[1])));
+            attestedAmount = abi.decode(logs[i].data, (uint256));
             break;
         }
     }
