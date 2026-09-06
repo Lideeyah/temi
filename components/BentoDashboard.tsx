@@ -48,6 +48,7 @@ import { SpatialSweepModal } from './SpatialSweepModal';
 import { LiveValuationCard } from './LiveValuationCard';
 import { PendingClaimsCard } from './PendingClaimsCard';
 import { AccountDrawer, AccountPill } from './AccountDrawer';
+import { VaultSetup, UninitializedBadge } from './VaultSetup';
 import { Badge, Button, MetricRow, Modal, Notice, StatusDot, TextInput } from './ui/Primitives';
 
 export function BentoDashboard() {
@@ -83,6 +84,52 @@ export function BentoDashboard() {
 
   const selectedAsset = activeAssets.find((a) => a.assetId === selectedAssetId) ?? null;
 
+  const [initialising, setInitialising] = useState(false);
+  const [depositPrefill, setDepositPrefill] = useState<bigint | undefined>(undefined);
+
+  /**
+   * The zero-state call to action. If there is no account yet this provisions one; if there is,
+   * it funds the first allocation the merchant just sized for themselves.
+   */
+  const initializeVault = useCallback(
+    async (monthlyWei: bigint) => {
+      if (!account.connected) {
+        setAccountDrawer('Open your vault');
+        return;
+      }
+      if (!account.walletClient || !account.address || !TEMI_VAULT_ADDRESS || monthlyWei <= 0n) return;
+
+      setInitialising(true);
+      try {
+        // A newly provisioned account holds only sponsored gas. Sending it at a deposit it
+        // cannot cover would fail with an error a merchant has no way to interpret, so route
+        // them to the funding rails with the amount they just sized already filled in.
+        const balance = await creditcoinPublicClient.getBalance({ address: account.address });
+        if (balance < monthlyWei) {
+          setDepositPrefill(monthlyWei);
+          setDepositOpen(true);
+          return;
+        }
+
+        const hash = await account.walletClient.writeContract({
+          address: TEMI_VAULT_ADDRESS,
+          abi: temiVaultAbi,
+          functionName: 'depositReserve',
+          value: monthlyWei,
+          account: account.address,
+          chain: creditcoinTestnet,
+        });
+        await creditcoinPublicClient.waitForTransactionReceipt({ hash });
+        void vault.refresh();
+      } catch {
+        // The merchant declined, or the transaction failed. The setup card stays as it is.
+      } finally {
+        setInitialising(false);
+      }
+    },
+    [account.connected, account.walletClient, account.address, vault],
+  );
+
   const compoundYield = useCallback(async () => {
     if (!account.walletClient || !account.address || !TEMI_VAULT_ADDRESS) return;
     const hash = await account.walletClient.writeContract({
@@ -104,6 +151,7 @@ export function BentoDashboard() {
         denomination={denomination}
         onDenominationChange={setDenomination}
         onOpenAccount={() => setAccountDrawer('Merchant account')}
+        initialized={vault.initialized}
       />
 
       <main className="mx-auto w-full max-w-[1240px] px-4 pb-16 pt-5 sm:px-6">
@@ -135,7 +183,27 @@ export function BentoDashboard() {
           </div>
         ) : null}
 
-        {/* ---- Bento grid: A+B on the top row, C+D on the bottom ---- */}
+        {/* Until a merchant has funded or registered anything there is no ledger to render —
+            only zeros. Show them the one thing they can act on instead. */}
+        {isVaultConfigured && !vault.loading && !vault.initialized ? (
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+            <div className="lg:col-span-2">
+              <VaultSetup
+                connected={account.connected}
+                busy={initialising || account.busy}
+                onInitialize={(monthly) => void initializeVault(monthly)}
+              />
+            </div>
+            {/* The live network stays visible throughout: it is the part that proves the
+                protocol is real, and it does not depend on the visitor having an account. */}
+            <AttestcoinConsole
+              vault={vault}
+              money={money}
+              walletClient={account.walletClient}
+              account={account.address}
+            />
+          </div>
+        ) : (
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
           <ReserveTile
             className="lg:col-span-2"
@@ -178,6 +246,7 @@ export function BentoDashboard() {
             account={account.address}
           />
         </div>
+        )}
       </main>
 
       <AccountDrawer
@@ -188,7 +257,11 @@ export function BentoDashboard() {
       />
       <DepositModal
         open={depositOpen}
-        onClose={() => setDepositOpen(false)}
+        onClose={() => {
+          setDepositOpen(false);
+          setDepositPrefill(undefined);
+        }}
+        prefillWei={depositPrefill}
         walletClient={account.walletClient}
         account={account.address}
         onDeposited={() => void vault.refresh()}
@@ -228,11 +301,13 @@ function Header({
   denomination,
   onDenominationChange,
   onOpenAccount,
+  initialized,
 }: {
   account: ReturnType<typeof useMerchantAccount>;
   denomination: Denomination;
   onDenominationChange: (d: Denomination) => void;
   onOpenAccount: () => void;
+  initialized: boolean;
 }) {
   return (
     <header className="sticky top-0 z-30 border-b border-hairline bg-paper/92 backdrop-blur-sm">
@@ -253,6 +328,7 @@ function Header({
             <Link2 size={9} strokeWidth={2} />
             Attestcoin readability active
           </Badge>
+          {!initialized ? <UninitializedBadge /> : null}
         </div>
 
         <div className="ml-auto flex items-center gap-2">

@@ -304,6 +304,22 @@ The readability path has been exercised end to end on the deployed contracts, in
      tier 2  0.412881349003333334   (mutual buffer)
 ```
 
+## The zero state
+
+A merchant with no vault has nothing to look at — every balance is zero and every tile is a row
+of dashes. Rather than showing them that and asking them to commit first, the uninitialised
+dashboard is replaced by the one thing they can act on without an account: sizing their own
+reserve. They pick machinery or property, type what it is worth, and see the target, the monthly
+contribution and the 85/15 split before anything is signed. Those numbers carry into funding.
+
+`useVault` skips every per-operator read when there is no operator, so an unauthenticated visitor
+costs one `protocolTelemetry` call and a block number rather than a dozen `eth_call`s against the
+zero address on every poll. The live network console stays visible throughout — it is the part
+that proves the protocol is real, and it does not depend on the visitor having an account.
+
+The dashboard flips to the live ledger once `lifetimeDeposits > 0 || assets.length > 0` — the
+honest on-chain signal that a merchant has actually started.
+
 ## Two surfaces
 
 | Route | What it is |

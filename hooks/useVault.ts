@@ -74,6 +74,8 @@ export interface VaultState {
   claims: PendingClaim[];
   revenue: RevenueState | null;
   blockNumber: bigint | null;
+  /** True once this operator has actually funded or registered something on-chain. */
+  initialized: boolean;
   loading: boolean;
   error: string | null;
 }
@@ -89,6 +91,7 @@ const EMPTY: VaultState = {
   claims: [],
   revenue: null,
   blockNumber: null,
+  initialized: false,
   loading: true,
   error: null,
 };
@@ -113,7 +116,36 @@ export function useVault(address: Address | null, pollMs = 12_000) {
 
     try {
       const contract = { address: TEMI_VAULT_ADDRESS, abi: temiVaultAbi } as const;
-      const operator = address ?? '0x0000000000000000000000000000000000000000';
+
+      // No account means nothing to read about. Querying the zero address returns zeros and
+      // costs a round trip per field on every poll, so the whole per-operator half is skipped
+      // and only chain-level state is fetched.
+      if (!address) {
+        const [telemetryOnly, blockOnly] = await Promise.all([
+          creditcoinPublicClient.readContract({ ...contract, functionName: 'protocolTelemetry' }),
+          creditcoinPublicClient.getBlockNumber(),
+        ]);
+        const only = telemetryOnly as readonly bigint[];
+        setState({
+          ...EMPTY,
+          telemetry: {
+            tier1Total: only[0],
+            tier2Pool: only[1],
+            claimsSettled: only[2],
+            valueDisbursed: only[3],
+            crossChainCount: only[4],
+            crossChainValue: only[5],
+            conduitBacking: only[6],
+            lastSourceHeight: only[7],
+            lastChainKey: only[8],
+          },
+          blockNumber: blockOnly,
+          loading: false,
+        });
+        return;
+      }
+
+      const operator = address;
 
       const [
         reserve, headroom, assets, telemetry, priceObs, ctcUsd, fresh, blockNumber,
@@ -250,6 +282,9 @@ export function useVault(address: Address | null, pollMs = 12_000) {
           fresh: fresh as boolean,
         },
         blockNumber,
+        // The honest on-chain signal that a merchant has started: they have funded a reserve or
+        // bound an asset. Anything else is an empty ledger dressed up as a dashboard.
+        initialized: reserve.lifetimeDeposits > 0n || (assets as readonly VaultAsset[]).length > 0,
         loading: false,
         error: null,
       });

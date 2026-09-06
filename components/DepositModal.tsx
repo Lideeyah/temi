@@ -31,7 +31,7 @@ import {
   waitUntilAttested,
   type AttestcoinProof,
 } from '@/lib/AttestcoinConduit';
-import { formatTctc, parseTctc, truncateHash } from '@/lib/format';
+import { formatTctc, formatTctcExact, formatNgn, parseTctc, truncateHash } from '@/lib/format';
 import { Badge, Button, Field, MetricRow, Modal, Notice, Tabs, TextInput } from './ui/Primitives';
 
 type TabId = 'attestcoin' | 'native' | 'trugi';
@@ -48,10 +48,20 @@ export interface DepositModalProps {
   walletClient: WalletClient | null;
   account: Address | null;
   onDeposited: () => void;
+  /** First allocation carried over from reserve sizing, in wei of tCTC. */
+  prefillWei?: bigint;
 }
 
-export function DepositModal({ open, onClose, walletClient, account, onDeposited }: DepositModalProps) {
-  const [tab, setTab] = useState<TabId>('attestcoin');
+export function DepositModal({
+  open,
+  onClose,
+  walletClient,
+  account,
+  onDeposited,
+  prefillWei,
+}: DepositModalProps) {
+  // A merchant who has just sized their reserve wants the local rail, not a cross-chain proof.
+  const [tab, setTab] = useState<TabId>(prefillWei && prefillWei > 0n ? 'trugi' : 'attestcoin');
 
   return (
     <Modal open={open} onClose={onClose} eyebrow="Fund reserve" title="Deposit" width="max-w-lg">
@@ -63,10 +73,20 @@ export function DepositModal({ open, onClose, walletClient, account, onDeposited
         <AttestcoinTab walletClient={walletClient} account={account} onDeposited={onDeposited} />
       ) : null}
       {tab === 'native' ? (
-        <NativeTab walletClient={walletClient} account={account} onDeposited={onDeposited} />
+        <NativeTab
+          walletClient={walletClient}
+          account={account}
+          onDeposited={onDeposited}
+          prefillWei={prefillWei}
+        />
       ) : null}
       {tab === 'trugi' ? (
-        <TrugiTab walletClient={walletClient} account={account} onDeposited={onDeposited} />
+        <TrugiTab
+          walletClient={walletClient}
+          account={account}
+          onDeposited={onDeposited}
+          prefillWei={prefillWei}
+        />
       ) : null}
     </Modal>
   );
@@ -368,12 +388,16 @@ function NativeTab({
   walletClient,
   account,
   onDeposited,
+  prefillWei,
 }: {
   walletClient: WalletClient | null;
   account: Address | null;
   onDeposited: () => void;
+  prefillWei?: bigint;
 }) {
-  const [amount, setAmount] = useState('1.0');
+  const [amount, setAmount] = useState(() =>
+    prefillWei && prefillWei > 0n ? formatTctcExact(prefillWei) : '1.0',
+  );
   const [pending, setPending] = useState(false);
   const [txHash, setTxHash] = useState<Hex | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -459,17 +483,19 @@ function TrugiTab({
   walletClient,
   account,
   onDeposited,
+  prefillWei,
 }: {
   walletClient: WalletClient | null;
   account: Address | null;
   onDeposited: () => void;
+  prefillWei?: bigint;
 }) {
   const [pending, setPending] = useState(false);
   const [txHash, setTxHash] = useState<Hex | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // A realistic NGN ticket size for a Lagos trader topping up their reserve.
-  const RELAY_AMOUNT = parseTctc('0.5');
+  // The allocation the merchant just sized, or a realistic default ticket for a Lagos trader.
+  const RELAY_AMOUNT = prefillWei && prefillWei > 0n ? prefillWei : parseTctc('0.5');
 
   const fireRelayer = useCallback(async () => {
     if (!walletClient || !account || !TEMI_VAULT_ADDRESS) return;
