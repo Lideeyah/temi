@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { useRegion } from './RegionProvider';
 import { Gavel, Loader2, ShieldQuestion, Timer } from 'lucide-react';
 import type { Address, Hex, WalletClient } from 'viem';
 import { creditcoinPublicClient, creditcoinTestnet } from '@/lib/chains';
@@ -36,6 +37,7 @@ export function PendingClaimsCard({
   account: Address | null;
   onChanged: () => void;
 }) {
+  const { money } = useRegion();
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
   const [busyId, setBusyId] = useState<bigint | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -110,8 +112,8 @@ export function PendingClaimsCard({
               )}
             </div>
 
-            <MetricRow label="Escrowed" value={`${formatTctc(claim.escrowedTier2)} tCTC`} tone="ochre" />
-            <MetricRow label="Your bond" value={`${formatTctc(claim.bond)} tCTC`} />
+            <MetricRow label="Escrowed" value={money(claim.escrowedTier2)} tone="ochre" />
+            <MetricRow label="Your bond" value={money(claim.bond)} />
 
             {challenged ? (
               <p className="mt-1.5 text-[10px] leading-snug text-rust">

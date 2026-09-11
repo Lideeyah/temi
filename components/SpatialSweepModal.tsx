@@ -119,7 +119,7 @@ export function SpatialSweepModal({
   account,
   onSettled,
 }: SpatialSweepModalProps) {
-  const { region, fiat } = useRegion();
+  const { region, fiat, money } = useRegion();
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -541,7 +541,7 @@ export function SpatialSweepModal({
         <div className="text-right">
           <p className="eyebrow mb-1">Declared</p>
           <p className="tabular text-[13px] font-semibold text-ink">
-            {formatTctc(asset.declaredValue)} tCTC
+            {money(asset.declaredValue)}
           </p>
         </div>
       </div>
@@ -581,21 +581,21 @@ export function SpatialSweepModal({
           {quote && quote.tier2Draw > 0n ? (
             <div className="border border-hairline bg-paper-raised px-3.5 py-3">
               <p className="eyebrow mb-2">What this claim would do</p>
-              <MetricRow label="From your own vault · no fee" value={`${formatTctc(quote.tier1Draw)} tCTC`} />
-              <MetricRow label="From the mutual buffer" value={`${formatTctc(quote.tier2Draw)} tCTC`} tone="moss" />
-              <MetricRow label="Fee · 1.5% of the mutual draw" value={`−${formatTctc(quote.settlementFee)} tCTC`} tone="rust" />
-              <MetricRow label="You receive" value={`${formatTctc(quote.netPayout)} tCTC`} />
+              <MetricRow label="From your own vault · no fee" value={money(quote.tier1Draw)} />
+              <MetricRow label="From the mutual buffer" value={money(quote.tier2Draw)} tone="moss" />
+              <MetricRow label="Fee · 1.5% of the mutual draw" value={`−${money(quote.settlementFee)}`} tone="rust" />
+              <MetricRow label="You receive" value={money(quote.netPayout)} />
               {quote.instant ? (
                 <p className="mt-1.5 text-[10.5px] leading-snug text-moss">
                   Small enough to settle in one block. You are paid immediately.
                 </p>
               ) : (
                 <p className="mt-1.5 text-[10.5px] leading-relaxed text-ochre">
-                  Your own {formatTctc(quote.tier1Draw)} tCTC is paid immediately. The buffer&apos;s
+                  Your own {money(quote.tier1Draw)} is paid immediately. The buffer&apos;s
                   share is held for 24 hours so anyone can object to it, then released — with a
                   10% bond withheld from your payout and returned when it settles.
                   {quote.bondRequired > 0n
-                    ? ` You will also need to send ${formatTctc(quote.bondRequired)} tCTC to cover the bond.`
+                    ? ` You will also need to send ${money(quote.bondRequired)} to cover the bond.`
                     : ''}
                 </p>
               )}
@@ -604,7 +604,7 @@ export function SpatialSweepModal({
 
           {lossExceedsDeclared ? (
             <Notice tone="rust" title="Above your declared value">
-              This asset is declared at {formatTctc(asset.declaredValue)} tCTC. Lower the amount,
+              This asset is declared at {money(asset.declaredValue)}. Lower the amount,
               or the contract will reject the claim.
             </Notice>
           ) : null}
@@ -929,7 +929,7 @@ export function SpatialSweepModal({
             <div className="mb-2 flex items-baseline justify-between">
               <span className="text-[11px] text-slate-soft">Net dispatched</span>
               <span className="tabular text-[19px] font-semibold tracking-[-0.02em] text-ink">
-                {formatTctc(receipt.payout)} <span className="text-[12px] text-slate-soft">tCTC</span>
+                {money(receipt.payout)}
               </span>
             </div>
             <MetricRow label="Block" value={receipt.blockNumber.toString()} />
@@ -950,7 +950,7 @@ export function SpatialSweepModal({
           </div>
 
           {escrow ? (
-            <Notice tone="ochre" title={`${formatTctc(escrow.amount)} tCTC held for challenge`} icon={<Timer size={12} />}>
+            <Notice tone="ochre" title={`${money(escrow.amount)} held for challenge`} icon={<Timer size={12} />}>
               Claim #{escrow.claimId.toString()}. The mutual buffer&apos;s share is open to
               objection for 24 hours, then you can release it from your dashboard. Your own funds
               above are already in your wallet.

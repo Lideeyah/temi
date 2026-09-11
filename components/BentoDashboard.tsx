@@ -831,6 +831,7 @@ function WithdrawModal({
   available: bigint;
   onWithdrawn: () => void;
 }) {
+  const { money } = useRegion();
   const [amount, setAmount] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -877,7 +878,7 @@ function WithdrawModal({
               onClick={() => setAmount(formatTctcExact(available))}
               className="tabular focus-ring text-[10px] text-ink underline underline-offset-2"
             >
-              max {formatTctc(available)} tCTC
+              max {money(available)}
             </button>
           </div>
           <TextInput

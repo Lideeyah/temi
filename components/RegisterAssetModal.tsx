@@ -35,6 +35,9 @@ import {
   readPlateTokens,
 } from '@/lib/SerialPlateReader';
 import { formatTctc, parseTctc, shortAssetId, truncateHash } from '@/lib/format';
+import { fiatToWei, parseFiat, type Region } from '@/lib/regions';
+import { cn } from '@/lib/utils';
+import { useRegion } from './RegionProvider';
 import { Badge, Button, Field, MetricRow, Modal, Notice, Tabs, TextInput } from './ui/Primitives';
 import { ReserveSizingCard, computeSizing, HORIZONS } from './ReserveSizing';
 
@@ -150,24 +153,56 @@ function RegistrationResult({ result }: { result: Registration }) {
   );
 }
 
+/**
+ * A starting figure in local money, derived from a token amount rather than hardcoded.
+ *
+ * ₦300,000 is a reasonable guess at a generator; GH₵300,000 is not a market stall, it is a
+ * building. Anchoring on tCTC and converting keeps the suggestion sane in all four jurisdictions.
+ */
+function defaultDeclared(region: Region, tctc: number): string {
+  return Math.round(tctc * region.ratePerTctc).toLocaleString('en-US');
+}
+
+/**
+ * What the asset would cost to replace, in the money the merchant actually thinks in.
+ *
+ * This asked for tCTC while every other surface — reserve sizing, the deposit modal, the whole
+ * dashboard — asks in naira. A trader does not know what their generator is worth in tCTC, and
+ * being made to guess at the one number that caps every future payout is the worst place to put
+ * that conversion on them. The token figure stays visible underneath, because it is what reaches
+ * the contract.
+ */
 function ValueField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const wei = parseTctc(value);
+  const { region } = useRegion();
+  const wei = fiatToWei(parseFiat(value), region);
   return (
     <Field
       label="Declared replacement value"
       hint="The ceiling on any future claim against this asset. Be honest — the contract caps payouts here."
-      suffix={<span className="tabular text-[10px] text-slate-soft">{formatTctc(wei)} tCTC</span>}
+      suffix={<span className="tabular text-[10px] text-slate-soft">{formatTctc(wei, 4)} tCTC</span>}
     >
       <div className="relative">
+        <span
+          className={cn(
+            'tabular pointer-events-none absolute top-1/2 -translate-y-1/2 text-[13px] font-semibold text-slate-soft',
+            region.currencySymbol.length > 1 ? 'left-3' : 'left-3.5',
+          )}
+        >
+          {region.currencySymbol}
+        </span>
         <TextInput
           value={value}
-          onChange={(event) => onChange(event.target.value)}
-          inputMode="decimal"
-          placeholder="2.5"
-          className="pr-16"
+          onChange={(event) => {
+            const next = parseFiat(event.target.value);
+            onChange(next > 0 ? next.toLocaleString('en-US') : event.target.value);
+          }}
+          inputMode="numeric"
+          aria-label={`Declared replacement value in ${region.currencyCode}`}
+          placeholder={defaultDeclared(region, 200)}
+          className={cn('pr-16', region.currencySymbol.length > 1 ? 'pl-10' : 'pl-7')}
         />
         <span className="tabular pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-slate-soft">
-          tCTC
+          {region.currencyCode}
         </span>
       </div>
     </Field>
@@ -200,7 +235,8 @@ function MachineryTrack({
   useEffect(() => {
     preloadOcr();
   }, []);
-  const [declared, setDeclared] = useState('2.5');
+  const { region, money } = useRegion();
+  const [declared, setDeclared] = useState(() => defaultDeclared(region, 200));
   const [horizon, setHorizon] = useState<number>(HORIZONS.movable[0]);
   const { pending, error, result, submit } = useRegistration(onRegistered);
 
@@ -270,7 +306,7 @@ function MachineryTrack({
   const normalisedSerial = serial.trim().toUpperCase();
   // Identity is the serial plate itself: keccak256(abi.encodePacked(serialNumber)).
   const assetId = normalisedSerial ? keccak256(stringToHex(normalisedSerial)) : null;
-  const wei = parseTctc(declared);
+  const wei = fiatToWei(parseFiat(declared), region);
   const ready = Boolean(assetId) && wei > 0n && !!walletClient;
 
   return (
@@ -391,7 +427,7 @@ function MachineryTrack({
           <MetricRow label="Category" value="MOVABLE_HARDWARE" tone="ochre" />
           <MetricRow
             label="Target reserve"
-            value={`${formatTctc(computeSizing(wei, 'movable', horizon).targetWei, 2)} tCTC`}
+            value={money(computeSizing(wei, 'movable', horizon).targetWei)}
             tone="moss"
           />
         </div>
@@ -443,7 +479,8 @@ function PropertyTrack({
   const [searching, setSearching] = useState<number | null>(null);
   const [gpsError, setGpsError] = useState<{ title: string; detail?: string } | null>(null);
   const [meter, setMeter] = useState('');
-  const [declared, setDeclared] = useState('5.0');
+  const { region } = useRegion();
+  const [declared, setDeclared] = useState(() => defaultDeclared(region, 400));
   const [horizon, setHorizon] = useState<number>(HORIZONS.property[0]);
   const { pending, error, result, submit } = useRegistration(onRegistered);
 
@@ -472,7 +509,7 @@ function PropertyTrack({
     fix && normalisedMeter
       ? keccak256(encodePacked(['string', 'string'], [fix.h3Index, normalisedMeter]))
       : null;
-  const wei = parseTctc(declared);
+  const wei = fiatToWei(parseFiat(declared), region);
   const ready = Boolean(assetId) && wei > 0n && !!walletClient;
 
   return (
