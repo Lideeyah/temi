@@ -382,7 +382,7 @@ function Header({
 
         <div className="flex flex-wrap items-center gap-1.5">
           <NetworkPill blockNumber={blockNumber} />
-          {!initialized ? <UninitializedBadge /> : null}
+          {!initialized ? <UninitializedBadge signedIn={account.connected} /> : null}
         </div>
 
         <div className="ml-auto flex items-center gap-2">

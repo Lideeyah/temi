@@ -247,6 +247,14 @@ export function VaultSetup({
 }
 
 /** Shown in the header while no reserve exists yet. */
-export function UninitializedBadge() {
-  return <Badge tone="ochre">Vault: not initialised</Badge>;
+/**
+ * Two different facts, told apart.
+ *
+ * "Vault: not initialised" was shown whenever there was nothing to read — including to someone
+ * who simply had not signed in yet, on a phone they had just opened the app on. That reads as a
+ * statement about their vault, which may be funded and perfectly fine; it is actually a statement
+ * about this browser. Saying "not signed in" is both true and the thing they can act on.
+ */
+export function UninitializedBadge({ signedIn = true }: { signedIn?: boolean }) {
+  return <Badge tone="ochre">{signedIn ? 'Vault: not initialised' : 'Not signed in'}</Badge>;
 }

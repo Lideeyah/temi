@@ -449,7 +449,15 @@ function NativeTab({
   onDeposited: () => void;
   prefillWei?: bigint;
 }) {
-  const { setDenomination } = useRegion();
+  /*
+   * This field stays in tCTC, deliberately.
+   *
+   * An on-chain transfer moves whole base units of the token; asking for naira and converting
+   * would put a rounding step between what the merchant typed and what the contract receives,
+   * and the balance and gas checks are done against the token figure. So the input is the truth
+   * and the fiat line underneath is the translation — not the other way round.
+   */
+  const { setDenomination, fiat, region } = useRegion();
   const [amount, setAmount] = useState(() =>
     prefillWei && prefillWei > 0n ? formatTctcExact(prefillWei) : '1.0',
   );
@@ -529,6 +537,14 @@ function NativeTab({
           balance === null
             ? 'Split 85% into your personal vault, 15% into the mutual buffer.'
             : `Balance ${formatTctc(balance, 4)} tCTC · up to ${formatTctc(spendable ?? 0n, 4)} allocatable after gas`
+        }
+        suffix={
+          wei > 0n ? (
+            <span className="tabular text-[10px] text-slate-soft">
+              ≈ {fiat(wei)} at {region.currencySymbol}
+              {region.ratePerTctc.toLocaleString('en-US')}/tCTC
+            </span>
+          ) : null
         }
       >
         <div className="relative">

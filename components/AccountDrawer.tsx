@@ -120,13 +120,19 @@ export function AccountDrawer({
               </p>
             </div>
 
-            <Notice tone="neutral" title="Set up takes about a minute" icon={<ShieldCheck size={12} />}>
-              Verify your number, choose a PIN, and your vault exists. The same number and PIN
-              restore it on any handset, so there is nothing to lose.
+            {/* On a second handset this same flow is a restore, not a new vault — the key is
+                derived from the number and PIN, so identical inputs reach the identical account.
+                Calling it "set-up" made merchants think they were about to create a second one
+                and lose the first. */}
+            <Notice tone="neutral" title="New here, or moving to a new phone?" icon={<ShieldCheck size={12} />}>
+              Same steps either way. Verify your number and enter your PIN: if you have a vault,
+              this opens it with everything in it; if you do not, this creates one. Your key is
+              derived from those two things, never stored, so the same pair always reaches the
+              same vault.
             </Notice>
 
             <Button block onClick={onClose}>
-              Continue to set-up
+              Continue
             </Button>
           </div>
         )

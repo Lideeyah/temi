@@ -35,6 +35,7 @@ import {
   readPlateTokens,
 } from '@/lib/SerialPlateReader';
 import { formatTctc, parseTctc, shortAssetId, truncateHash } from '@/lib/format';
+import { waitForElement } from '@/lib/waitForElement';
 import { fiatToWei, parseFiat, type Region } from '@/lib/regions';
 import { cn } from '@/lib/utils';
 import { useRegion } from './RegionProvider';
@@ -225,6 +226,7 @@ function MachineryTrack({
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [cameraOn, setCameraOn] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
   const [capture, setCapture] = useState<string | null>(null);
   const [serial, setSerial] = useState('');
   const [candidates, setCandidates] = useState<string[] | null>(null);
@@ -249,6 +251,7 @@ function MachineryTrack({
   useEffect(() => () => stopCamera(), [stopCamera]);
 
   const openCamera = useCallback(async () => {
+    setCameraError(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: 'environment' } },
@@ -256,12 +259,37 @@ function MachineryTrack({
       });
       streamRef.current = stream;
       setCameraOn(true);
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
+
+      /*
+       * The <video> does not exist yet.
+       *
+       * It is only rendered once cameraOn is true, and React has not committed that render by the
+       * time the next line runs — so videoRef.current is null, the stream is assigned to nothing,
+       * and the viewfinder stays black with the camera light on and no error anywhere. Wait for
+       * the element instead of assuming it.
+       */
+      const video = await waitForElement(videoRef);
+      if (!video) {
+        setCameraError('The viewfinder did not open. Close this and try again.');
+        setCameraOn(false);
+        return;
       }
-    } catch {
+      video.srcObject = stream;
+      await video.play();
+    } catch (cause) {
       setCameraOn(false);
+      // Say which refusal it was. "Camera unavailable" covers a denied permission, a camera
+      // another app is holding, and a machine with no camera at all — three different fixes.
+      const name = cause instanceof DOMException ? cause.name : '';
+      setCameraError(
+        name === 'NotAllowedError'
+          ? 'Camera permission was refused. Allow it for this site and try again.'
+          : name === 'NotFoundError'
+            ? 'This device reports no camera.'
+            : name === 'NotReadableError'
+              ? 'The camera is in use by another application.'
+              : 'The camera could not be opened.',
+      );
     }
   }, []);
 
@@ -357,6 +385,8 @@ function MachineryTrack({
           Open camera to read the plate
         </Button>
       )}
+
+      {cameraError ? <Notice tone="rust" title={cameraError} /> : null}
 
       {reading ? (
         <Notice tone="steel" title="Reading the plate…" icon={<Loader2 size={12} className="animate-spin" />} />
