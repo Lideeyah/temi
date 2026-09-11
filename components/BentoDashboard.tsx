@@ -13,7 +13,8 @@ import {
   Store,
   Wallet,
 } from 'lucide-react';
-import type { Hex } from 'viem';
+import { formatUnits, type Hex } from 'viem';
+import { fiatToWei, parseFiat } from '@/lib/regions';
 import { useMerchantAccount } from '@/hooks/useMerchantAccount';
 import { useVault, type VaultAsset } from '@/hooks/useVault';
 import {
@@ -831,13 +832,15 @@ function WithdrawModal({
   available: bigint;
   onWithdrawn: () => void;
 }) {
-  const { money } = useRegion();
+  const { money, denomination, region } = useRegion();
   const [amount, setAmount] = useState('');
+  const unitLabel = denomination === 'fiat' ? region.currencyCode : 'tCTC';
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<Hex | null>(null);
 
-  const wei = parseTctc(amount);
+  // One field, two units. Whatever the merchant reads in is what they type in.
+  const wei = denomination === 'fiat' ? fiatToWei(parseFiat(amount), region) : parseTctc(amount);
   const valid = wei > 0n && wei <= available;
 
   const withdraw = useCallback(async () => {
@@ -871,22 +874,42 @@ function WithdrawModal({
           structural difference between a reserve and a premium.
         </p>
 
+        {/* Typed in whichever unit the merchant is reading. "max ₦102,000" above a box that
+            silently means tCTC is an invitation to type 102000 and try to withdraw a hundred
+            thousand tokens. */}
         <label className="block">
           <div className="mb-1.5 flex items-baseline justify-between">
-            <span className="eyebrow">Amount</span>
+            <span className="eyebrow">Amount · {unitLabel}</span>
             <button
-              onClick={() => setAmount(formatTctcExact(available))}
+              onClick={() =>
+                setAmount(
+                  denomination === 'fiat'
+                    ? Math.floor(Number(formatUnits(available, 18)) * region.ratePerTctc).toLocaleString('en-US')
+                    : formatTctcExact(available),
+                )
+              }
               className="tabular focus-ring text-[10px] text-ink underline underline-offset-2"
             >
               max {money(available)}
             </button>
           </div>
-          <TextInput
-            value={amount}
-            onChange={(event) => setAmount(event.target.value)}
-            inputMode="decimal"
-            placeholder="0.0"
-          />
+          <div className="relative">
+            {denomination === 'fiat' ? (
+              <span className="tabular pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[13px] text-slate-soft">
+                {region.currencySymbol}
+              </span>
+            ) : null}
+            <TextInput
+              value={amount}
+              onChange={(event) => setAmount(event.target.value)}
+              inputMode={denomination === 'fiat' ? 'numeric' : 'decimal'}
+              placeholder={denomination === 'fiat' ? '0' : '0.0'}
+              className={denomination === 'fiat' && region.currencySymbol.length === 1 ? 'pl-7' : undefined}
+            />
+          </div>
+          {denomination === 'fiat' && wei > 0n ? (
+            <p className="tabular mt-1.5 text-[10px] text-slate-soft">≈ {formatTctc(wei, 4)} tCTC</p>
+          ) : null}
         </label>
 
         {wei > available ? <Notice tone="rust" title="Exceeds your Tier 1 balance" /> : null}

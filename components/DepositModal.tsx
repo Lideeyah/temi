@@ -141,6 +141,7 @@ function AttestcoinTab({
   account: Address | null;
   onDeposited: () => void;
 }) {
+  const { setDenomination } = useRegion();
   // Proof count belongs here, next to the act of moving cross-chain money — not on a dashboard
   // a merchant reads while doing something else entirely.
   const [crossChainCount, setCrossChainCount] = useState<bigint | null>(null);
@@ -295,6 +296,9 @@ function AttestcoinTab({
 
       setCredited({ hash: txHash, amount });
       setStage('done');
+      // The unit follows the rail: a merchant who funded through Sepolia now reads the
+      // whole app in tCTC, until they say otherwise.
+      setDenomination('tCTC');
       onDeposited();
     } catch (cause) {
       const message = cause instanceof Error ? cause.message.split('\n')[0] : 'Attestcoin deposit failed';
@@ -445,6 +449,7 @@ function NativeTab({
   onDeposited: () => void;
   prefillWei?: bigint;
 }) {
+  const { setDenomination } = useRegion();
   const [amount, setAmount] = useState(() =>
     prefillWei && prefillWei > 0n ? formatTctcExact(prefillWei) : '1.0',
   );
@@ -500,6 +505,9 @@ function NativeTab({
       await creditcoinPublicClient.waitForTransactionReceipt({ hash });
       setTxHash(hash);
       void refreshBalance();
+      // The unit follows the rail: a merchant who funded through the native token now reads the
+      // whole app in tCTC, until they say otherwise.
+      setDenomination('tCTC');
       onDeposited();
     } catch (cause) {
       setError(describeTxFailure(cause));
@@ -657,7 +665,7 @@ function TrugiTab({
   onDeposited: () => void;
   prefillWei?: bigint;
 }) {
-  const { region, fiat } = useRegion();
+  const { region, fiat, setDenomination } = useRegion();
   const [pending, setPending] = useState(false);
   const [txHash, setTxHash] = useState<Hex | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -722,6 +730,9 @@ function TrugiTab({
       });
       await creditcoinPublicClient.waitForTransactionReceipt({ hash });
       setTxHash(hash);
+      // The unit follows the rail: a merchant who funded through their local rail now reads the
+      // whole app in their own currency, until they say otherwise.
+      setDenomination('fiat');
       onDeposited();
     } catch (cause) {
       setError(describeTxFailure(cause));
