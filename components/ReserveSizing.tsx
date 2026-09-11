@@ -23,10 +23,26 @@ import { useRegion } from './RegionProvider';
 /** Must match TARGET_RESERVE_*_BPS in TemiVault.sol. */
 export const TARGET_BPS = { movable: 3000, property: 2000 } as const;
 
+/**
+ * The horizon a merchant is nudged toward, not the only one they may pick.
+ *
+ * These were once the entire choice — two buttons per category — which quietly decided for the
+ * merchant how fast they must save. A trader whose season is bad needs to stretch the same target
+ * over more months; one who has just been paid may want to be covered before the rains. Both are
+ * legitimate, and the contract never cared: registerAsset takes any uint64 and only substitutes 6
+ * when it is given 0.
+ */
 export const HORIZONS = {
   movable: [3, 6],
   property: [6, 12],
 } as const;
+
+/** What a merchant may actually choose, in months. */
+export const HORIZON_RANGE = { min: 1, max: 24 } as const;
+
+/** The recommendation for a category — the longer of its two reference points. */
+export const recommendedHorizon = (category: keyof typeof HORIZONS): number =>
+  HORIZONS[category][HORIZONS[category].length - 1];
 
 export interface Sizing {
   declaredWei: bigint;
@@ -82,6 +98,8 @@ export function ReserveSizingCard({
     [declaredWei, category, horizonMonths],
   );
 
+  const recommended = recommendedHorizon(category);
+
   if (declaredWei <= 0n) return null;
 
   return (
@@ -105,20 +123,44 @@ export function ReserveSizingCard({
       </div>
 
       <div className="px-3.5 py-3">
-        <p className="eyebrow mb-1.5">Funding horizon</p>
-        <div className="mb-3 flex overflow-hidden rounded-[3px] border border-hairline-strong">
+        <div className="mb-1.5 flex items-baseline justify-between">
+          <span className="eyebrow">Funding horizon</span>
+          <span className="tabular text-[11px] font-semibold text-ink">
+            {horizonMonths} {horizonMonths === 1 ? 'month' : 'months'}
+          </span>
+        </div>
+
+        <input
+          type="range"
+          min={HORIZON_RANGE.min}
+          max={HORIZON_RANGE.max}
+          step={1}
+          value={horizonMonths}
+          onChange={(event) => onHorizonChange(Number(event.target.value))}
+          aria-label="Months to reach your reserve target"
+          className="temi-range focus-ring w-full"
+        />
+
+        <div className="tabular mb-2 flex justify-between text-[9.5px] text-slate-soft">
+          <span>{HORIZON_RANGE.min} mo</span>
+          <span>{HORIZON_RANGE.max} mo</span>
+        </div>
+
+        {/* The reference points stay reachable in one tap — a slider is worse than a button when
+            you already know the answer. */}
+        <div className="mb-3 flex flex-wrap gap-1.5">
           {HORIZONS[category].map((months) => (
             <button
               key={months}
               onClick={() => onHorizonChange(months)}
               className={cn(
-                'focus-ring flex-1 px-2 py-1.5 text-[11px] font-medium transition-colors',
+                'focus-ring rounded-[2px] border px-2 py-1 text-[10px] font-medium transition-colors',
                 horizonMonths === months
-                  ? 'bg-ink text-paper'
-                  : 'bg-transparent text-slate-strong hover:bg-[rgba(31,36,47,0.05)]',
+                  ? 'border-ink bg-ink text-paper'
+                  : 'border-hairline-strong text-slate-strong hover:bg-[rgba(31,36,47,0.05)]',
               )}
             >
-              {months} months
+              {months} mo{months === recommended ? ' · suggested' : ''}
             </button>
           ))}
         </div>
@@ -151,6 +193,20 @@ export function ReserveSizingCard({
           Roughly {sizing.monthlyRatePercent.toFixed(1)}% of the asset&apos;s value each month.
           Nothing here is a premium — every {region.currencyCode} stays on your balance sheet, and
           the mutual share is what unlocks the 3× emergency ceiling.
+        </p>
+
+        {/* The part a shorter or longer horizon actually changes. Stretching the target lowers
+            the monthly figure and nothing else: the target arrives later, and a loss before then
+            leans harder on the mutual buffer. Say it here rather than let the slider imply the
+            only difference is the price. */}
+        <p className="mt-1.5 text-[10px] leading-relaxed text-slate-soft">
+          At {horizonMonths} {horizonMonths === 1 ? 'month' : 'months'} you reach full cover
+          in {horizonMonths === 1 ? 'a month' : `${horizonMonths} months`}
+          {horizonMonths > recommended
+            ? ` — longer than the ${recommended}-month guide for this category, so a loss in the meantime draws more from the mutual buffer.`
+            : horizonMonths < recommended
+              ? ` — faster than the ${recommended}-month guide, at a higher monthly cost.`
+              : '.'}
         </p>
       </div>
     </div>

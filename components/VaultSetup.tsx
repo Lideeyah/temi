@@ -6,7 +6,7 @@ import { fiatToWei, formatFiat, formatFiatPlain, parseFiat, type RegionId } from
 import { formatTctc } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { useRegion } from './RegionProvider';
-import { ReserveSizingCard, computeSizing, HORIZONS } from './ReserveSizing';
+import { ReserveSizingCard, computeSizing, recommendedHorizon } from './ReserveSizing';
 import { StageRail } from './MerchantProfileStage';
 import { PhoneVerification } from './PhoneVerification';
 import { PinSetup } from './PinSetup';
@@ -59,7 +59,7 @@ export function VaultSetup({
   const { region, setRegion } = useRegion();
   const [category, setCategory] = useState<'movable' | 'property'>('movable');
   const [raw, setRaw] = useState(() => region.defaultAssetValue.toLocaleString('en-US'));
-  const [horizon, setHorizon] = useState<number>(HORIZONS.movable[0]);
+  const [horizon, setHorizon] = useState<number>(recommendedHorizon('movable'));
 
   // Changing jurisdiction re-anchors the example value: a Ghanaian trader should not open on a
   // figure that only makes sense in Naira.
@@ -85,10 +85,9 @@ export function VaultSetup({
     [declaredWei, category, horizon],
   );
 
-  const chooseCategory = (next: 'movable' | 'property') => {
-    setCategory(next);
-    setHorizon(HORIZONS[next][0]);
-  };
+  // Switching category re-sizes the target but keeps the merchant's chosen horizon. They set it
+  // against their own cash flow, which does not change because the asset did.
+  const chooseCategory = (next: 'movable' | 'property') => setCategory(next);
 
   return (
     <section className="card p-5 sm:p-7">
