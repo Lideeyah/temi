@@ -164,6 +164,10 @@ export function useVault(address: Address | null, pollMs = 12_000) {
           },
           blockNumber: blockOnly,
           loading: false,
+          // A protocol-only read is still a read that succeeded. Leaving this false made the
+          // signed-out landing indistinguishable from a failed one, and hid the setup card that
+          // is the only way in.
+          hasRead: true,
         });
         return;
       }
