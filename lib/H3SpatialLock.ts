@@ -80,7 +80,7 @@ function describeGeolocationError(error: GeolocationPositionError): SpatialLockE
       return new SpatialLockError(
         'ERR_TIMEOUT',
         'Location request timed out',
-        'The device could not acquire a fix in time.',
+        'No reading arrived before the deadline. On a laptop this is usually Location Services being off for the browser — on macOS, System Settings → Privacy & Security → Location Services. A phone fixes in seconds.',
       );
     default:
       return new SpatialLockError('ERR_POSITION_UNAVAILABLE', error.message);
@@ -95,9 +95,18 @@ function describeGeolocationError(error: GeolocationPositionError): SpatialLockE
  * enough to track them.
  */
 export async function acquireSpatialLock(
-  options: { timeoutMs?: number; maxAccuracyMeters?: number } = {},
+  options: {
+    timeoutMs?: number;
+    maxAccuracyMeters?: number;
+    /** Called with each reading's accuracy in metres, so the interface can show it converging. */
+    onProgress?: (accuracyMeters: number) => void;
+  } = {},
 ): Promise<SpatialFix> {
-  const { timeoutMs = 20_000, maxAccuracyMeters = MAX_GPS_ACCURACY_METERS } = options;
+  const {
+    timeoutMs = 35_000,
+    maxAccuracyMeters = MAX_GPS_ACCURACY_METERS,
+    onProgress,
+  } = options;
 
   if (typeof navigator === 'undefined' || !navigator.geolocation) {
     throw new SpatialLockError(
@@ -107,12 +116,58 @@ export async function acquireSpatialLock(
     );
   }
 
+  /*
+   * Watch rather than ask once.
+   *
+   * getCurrentPosition gives one answer and one chance. That suits a phone with a GPS radio,
+   * which fixes in a second or two. A laptop has no radio: macOS infers position from surrounding
+   * wifi networks, and the first reading is often coarse or absent while it builds a picture,
+   * improving over several seconds. Asking once with enableHighAccuracy and a twenty-second
+   * ceiling is therefore a coin toss, and when it loses the merchant is told the device "could
+   * not acquire a fix in time" — with no indication that it was ten metres from succeeding.
+   *
+   * So: watch, keep the best reading, stop the moment one is good enough, and if the deadline
+   * arrives first, hand the best one onward anyway. The accuracy check below then rejects it by
+   * name and number — "±340 m exceeds the ±100 m ceiling" — which is a fact the merchant can act
+   * on, where a timeout is not.
+   */
   const position = await new Promise<GeolocationPosition>((resolve, reject) => {
-    navigator.geolocation.getCurrentPosition(resolve, (error) => reject(describeGeolocationError(error)), {
-      enableHighAccuracy: true,
-      timeout: timeoutMs,
-      maximumAge: 0,
-    });
+    let best: GeolocationPosition | null = null;
+    let settled = false;
+
+    const finish = (act: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      navigator.geolocation.clearWatch(watchId);
+      act();
+    };
+
+    const timer = setTimeout(
+      () =>
+        finish(() => {
+          if (best) resolve(best);
+          else
+            reject(
+              new SpatialLockError(
+                'ERR_TIMEOUT',
+                'No position in time',
+                'The device returned no reading at all. On a laptop this usually means Location Services is off for this browser — on macOS, System Settings → Privacy & Security → Location Services. A phone will fix in seconds.',
+              ),
+            );
+        }),
+      timeoutMs,
+    );
+
+    const watchId = navigator.geolocation.watchPosition(
+      (reading) => {
+        if (!best || reading.coords.accuracy < best.coords.accuracy) best = reading;
+        onProgress?.(reading.coords.accuracy);
+        if (reading.coords.accuracy <= maxAccuracyMeters) finish(() => resolve(reading));
+      },
+      (error) => finish(() => reject(describeGeolocationError(error))),
+      { enableHighAccuracy: true, timeout: timeoutMs, maximumAge: 0 },
+    );
   });
 
   const { latitude, longitude, accuracy } = position.coords;

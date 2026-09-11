@@ -439,6 +439,8 @@ function PropertyTrack({
 }) {
   const [fix, setFix] = useState<SpatialFix | null>(null);
   const [locating, setLocating] = useState(false);
+  /** Accuracy of the latest reading while the fix converges, in metres. */
+  const [searching, setSearching] = useState<number | null>(null);
   const [gpsError, setGpsError] = useState<{ title: string; detail?: string } | null>(null);
   const [meter, setMeter] = useState('');
   const [declared, setDeclared] = useState('5.0');
@@ -448,14 +450,18 @@ function PropertyTrack({
   const locate = useCallback(async () => {
     setLocating(true);
     setGpsError(null);
+    setSearching(null);
     try {
-      setFix(await acquireSpatialLock());
+      // Report each reading as it arrives. A laptop's position converges over several seconds,
+      // and a merchant watching a spinner has no way to tell converging from hung.
+      setFix(await acquireSpatialLock({ onProgress: (accuracy) => setSearching(accuracy) }));
     } catch (cause) {
       const spatialError = cause as SpatialLockError;
       setGpsError({ title: spatialError.message, detail: spatialError.detail });
       setFix(null);
     } finally {
       setLocating(false);
+      setSearching(null);
     }
   }, []);
 
@@ -505,8 +511,24 @@ function PropertyTrack({
 
         <Button variant="outline" block className="mt-2.5" onClick={() => void locate()} disabled={locating}>
           {locating ? <Loader2 size={14} className="animate-spin" /> : <MapPin size={14} strokeWidth={1.75} />}
-          {locating ? 'Acquiring fix…' : fix ? 'Re-acquire fix' : 'Acquire GPS fix'}
+          {locating
+            ? searching === null
+              ? 'Acquiring fix…'
+              : `Narrowing… ±${Math.round(searching)} m`
+            : fix
+              ? 'Re-acquire fix'
+              : 'Acquire GPS fix'}
         </Button>
+
+        {/* A laptop converges over several seconds. Showing the number moving is the difference
+            between "working" and "frozen", and if it stalls wide of the ceiling the merchant can
+            see that too rather than waiting for a timeout to tell them nothing. */}
+        {locating && searching !== null ? (
+          <p className="tabular mt-1.5 text-[10px] text-slate-soft">
+            Best reading so far ±{Math.round(searching)} m · needs ±{MAX_GPS_ACCURACY_METERS} m or
+            better
+          </p>
+        ) : null}
       </div>
 
       {gpsError ? <Notice tone="rust" title={gpsError.title}>{gpsError.detail}</Notice> : null}
