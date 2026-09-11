@@ -13,7 +13,7 @@ import { createPublicClient, http, defineChain, keccak256, toHex } from 'viem';
 import { execSync } from 'node:child_process';
 
 const DEPLOYED = {
-  TemiVault: { address: '0x83c7841dc38bb662e1e7d7a47d300b2ddd676449', chain: 'cc3-testnet' },
+  TemiVault: { address: '0x17766312c7300d01aed58174bc6ff39944272a2c', chain: 'cc3-testnet' },
 };
 
 const cc = defineChain({

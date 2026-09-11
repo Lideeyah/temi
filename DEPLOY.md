@@ -9,8 +9,10 @@ Run `npm run drift` at any time to see how far source has moved ahead of the cha
 
 | Contract | Chain | Address |
 | --- | --- | --- |
-| `TemiVault` | Creditcoin cc3-testnet (102031) | `0x83c7841dc38bb662e1e7d7a47d300b2ddd676449` |
-| `TemiSourcePortal` | Ethereum Sepolia | `0x83C7841dC38bb662E1E7D7a47d300b2DdD676449` |
+| `TemiVault` | Creditcoin cc3-testnet (102031) | `0x17766312c7300d01aed58174bc6ff39944272a2c` |
+| `TemiSourcePortal` | Ethereum Sepolia | `0x81b78bc835267408d851fae39a15e123ea66819c` |
+
+`npm run drift` reports **no drift** — deployed bytecode matches source.
 
 Deployer / treasury / arbiter: `0x042C27cBF84003e59D08d85b1Bda54235D1F576F` (key in `.deployer.json`, gitignored).
 
@@ -18,7 +20,14 @@ Configured and verified on-chain: Chainlink ETH/USD aggregator registered for ch
 source portal registered for chain key 1 (both **write-once, already set**), tCTC/USD at $0.90,
 200 tCTC of conduit float seeded.
 
-## Pending for the final deploy
+## Superseded — kept for the record
+
+Everything below shipped in the deploy above. The previous instances
+(`0x83c7841d…` on both chains) are abandoned, with ~197 tCTC of conduit float and
+0.001 ETH stranded in them — they predate the withdrawal paths that would have
+released it.
+
+### Was pending
 
 - `TemiVault.withdrawConduitLiquidity` — treasury reclaim of unallocated float.
 - `TemiSourcePortal` constructor takes a treasury, and gains `sweep`.

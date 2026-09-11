@@ -308,8 +308,8 @@ deployer at <https://faucet.creditcoin.org> first.
 
 | Contract | Chain | Address |
 | --- | --- | --- |
-| `TemiVault` | Creditcoin cc3-testnet (102031) | [`0x83c7841d…d676449`](https://creditcoin-testnet.blockscout.com/address/0x83c7841dc38bb662e1e7d7a47d300b2ddd676449) |
-| `TemiSourcePortal` | Ethereum Sepolia (Attestcoin chain key 1) | [`0x83C7841d…D676449`](https://sepolia.etherscan.io/address/0x83C7841dC38bb662E1E7D7a47d300b2DdD676449) |
+| `TemiVault` | Creditcoin cc3-testnet (102031) | [`0x17766312…4272a2c`](https://creditcoin-testnet.blockscout.com/address/0x17766312c7300d01aed58174bc6ff39944272a2c) |
+| `TemiSourcePortal` | Ethereum Sepolia (Attestcoin chain key 1) | [`0x81b78bc8…a66819c`](https://sepolia.etherscan.io/address/0x81b78bc835267408d851fae39a15e123ea66819c) |
 | Block Prover precompile | Creditcoin runtime | [`0x…0FD2`](https://creditcoin-testnet.blockscout.com/address/0x0000000000000000000000000000000000000FD2) |
 | Chainlink ETH/USD aggregator | Ethereum Sepolia | `0x719E22E3D4b690E5d96cCb40619180B5427F14AE` |
 
@@ -321,18 +321,18 @@ The readability path has been exercised end to end on the deployed contracts, in
 
 | What | Transaction |
 | --- | --- |
-| **Live valuation** — a real Chainlink round read off Ethereum through `0x0FD2` and adopted as the vault's rate (round 35835, $2477.29, 279k gas) | [`0x0c91f531…cccf11ad`](https://creditcoin-testnet.blockscout.com/tx/0x0c91f5310e663f04ada4d3546bc5885c22abad2ffeb8f68de77a6aa2cccf11ad) |
-| **Source deposit** — 0.001 ETH funded on Ethereum Sepolia, emitting `ReserveFunded` | [`0x3f72914b…263d3231`](https://sepolia.etherscan.io/tx/0x3f72914bcd708da343bffa9692282f65c978678bb0c2ae1c9a68a6a9263d3231) |
-| **Cross-chain credit** — that Sepolia deposit proven and read into Creditcoin, priced at the proven rate, split 85/15 (305k gas) | [`0x3cf65ef8…181e65e7`](https://creditcoin-testnet.blockscout.com/tx/0x3cf65ef8384bf95708d26088e04948df81c4f9602abee0b1adf84f80181e65e7) |
+| **Live valuation** — a real Chainlink round read off Ethereum through `0x0FD2` and adopted as the vault's rate (round 35950, $2478.30, 356k gas) | [`0x01040a3c…c9e3534bb`](https://creditcoin-testnet.blockscout.com/tx/0x01040a3c6282eadf6c21e3b367e1083f7499e056c37bf4e2b3cc228c9e3534bb) |
+| **Source deposit** — 0.001 ETH funded on Ethereum Sepolia, emitting `ReserveFunded` | [`0xa3081650…601c7174`](https://sepolia.etherscan.io/tx/0xa3081650daaea03f0a6c4186ff3827460b5224957a4b31bb124d1993601c7174) |
+| **Cross-chain credit** — that Sepolia deposit proven and read into Creditcoin, priced at the proven rate, split 85/15 (319k gas) | [`0x2298335e…4e9994b1c`](https://creditcoin-testnet.blockscout.com/tx/0x2298335e7189d1fb203a5672a8bd3e4ad0f7f1ee7092f85632703c44e9994b1c) |
 
 ```
 0.001 ETH on Sepolia
-  -> attestor quorum reaches block 11,648,194   (~44 blocks, ~9 min)
+  -> attestor quorum reaches block 11,681,064   (~44 blocks, ~9 min)
   -> 0x0FD2 verifies inclusion + continuity
-  -> priced at the proven ETH/USD of $2477.29 against tCTC/USD of $0.90
-  -> credited 2.752542326688888888 tCTC
-     tier 1  2.339660977685555554   (withdrawable)
-     tier 2  0.412881349003333334   (mutual buffer)
+  -> priced at the proven ETH/USD of $2478.30 against tCTC/USD of $0.90
+  -> credited 2.753666666666666666 tCTC
+     tier 1  2.340616666666666666   (withdrawable)
+     tier 2  0.413050000000000000   (mutual buffer)
 ```
 
 ## Regional adaptation

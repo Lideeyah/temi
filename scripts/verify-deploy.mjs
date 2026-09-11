@@ -7,7 +7,7 @@ const cc = defineChain({
 });
 const client = createPublicClient({ chain: cc, transport: http() });
 const { abi } = JSON.parse(fs.readFileSync('artifacts/TemiVault.json', 'utf8'));
-const address = '0x83c7841dc38bb662e1e7d7a47d300b2ddd676449';
+const address = '0x17766312c7300d01aed58174bc6ff39944272a2c';
 
 const read = (functionName, args = []) => client.readContract({ address, abi, functionName, args });
 
