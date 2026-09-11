@@ -9,9 +9,13 @@ import { temiVaultAbi } from '@/lib/abi';
 export interface VaultAsset {
   assetId: `0x${string}`;
   category: 0 | 1;
-  declaredValue: bigint;
-  h3CellIndex: bigint;
   isActive: boolean;
+  h3CellIndex: bigint;
+  targetHorizonMonths: bigint;
+  registeredAt: bigint;
+  declaredValue: bigint;
+  /** The reserve this asset should be backed by. */
+  targetReserve: bigint;
 }
 
 export interface VaultTelemetry {

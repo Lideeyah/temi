@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import {
   Activity,
   ArrowUpRight,
@@ -52,6 +52,10 @@ import { AccountDrawer, AccountPill } from './AccountDrawer';
 import { PinPrompt } from './PinSetup';
 import { VaultSetup, UninitializedBadge } from './VaultSetup';
 import { Badge, Button, MetricRow, Modal, Notice, StatusDot, TextInput } from './ui/Primitives';
+
+/** Lifetime deposits, so an asset card can show funding progress without prop-drilling. */
+const VaultContext = createContext<{ lifetimeDeposits: bigint }>({ lifetimeDeposits: 0n });
+const useVaultContext = () => useContext(VaultContext);
 
 export function BentoDashboard() {
   const account = useMerchantAccount();
@@ -155,6 +159,7 @@ export function BentoDashboard() {
   }, [account.walletClient, account.address, vault]);
 
   return (
+    <VaultContext.Provider value={{ lifetimeDeposits: vault.lifetimeDeposits }}>
     <div className="flex min-h-dvh flex-col bg-paper">
       <Header
         account={account}
@@ -322,6 +327,7 @@ export function BentoDashboard() {
         onSettled={() => void vault.refresh()}
       />
     </div>
+    </VaultContext.Provider>
   );
 }
 
@@ -724,6 +730,7 @@ function AssetCard({
       </div>
 
       <MetricRow label="Declared" value={money(asset.declaredValue)} />
+      {asset.targetReserve > 0n ? <CoverageHealth asset={asset} money={money} /> : null}
       {isProperty ? (
         <MetricRow label="H3 cell" value={cellIndexToH3(asset.h3CellIndex)} tone="steel" />
       ) : (
@@ -739,6 +746,53 @@ function AssetCard({
         </button>
       ) : null}
     </article>
+  );
+}
+
+/**
+ * How far an operator has funded the reserve this asset should sit behind.
+ *
+ * Measured against lifetime deposits rather than the current balance, so drawing your own money
+ * down does not read as losing cover you paid for. The contract computes the same figure in
+ * `coverageHealthBps`; this mirrors it locally to avoid a read per asset on every poll.
+ */
+function CoverageHealth({
+  asset,
+  money,
+}: {
+  asset: VaultAsset;
+  money: (wei: bigint) => string;
+}) {
+  const { lifetimeDeposits } = useVaultContext();
+  const funded = asset.targetReserve > 0n
+    ? Number((lifetimeDeposits * 10000n) / asset.targetReserve) / 100
+    : 0;
+  const capped = Math.min(100, funded);
+  const met = capped >= 100;
+
+  return (
+    <div className="mt-1.5">
+      <div className="mb-1 flex items-baseline justify-between gap-2">
+        <span className="text-[10px] text-slate-soft">
+          Target {money(asset.targetReserve)}
+          {asset.targetHorizonMonths > 0n ? ` · ${asset.targetHorizonMonths}mo` : ''}
+        </span>
+        <span className={cn('tabular text-[10px] font-medium', met ? 'text-moss' : 'text-ochre')}>
+          {capped.toFixed(0)}% funded
+        </span>
+      </div>
+      <div className="h-[4px] w-full overflow-hidden rounded-[1px] bg-[rgba(31,36,47,0.08)]">
+        <div
+          className={cn('h-full transition-[width] duration-500', met ? 'bg-moss' : 'bg-ochre')}
+          style={{ width: `${Math.max(2, capped)}%` }}
+        />
+      </div>
+      {met ? (
+        <p className="mt-1 text-[9.5px] leading-snug text-moss">
+          Target met · emergency multiplier active at 3× contributions
+        </p>
+      ) : null}
+    </div>
   );
 }
 

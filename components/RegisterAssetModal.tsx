@@ -27,6 +27,13 @@ import {
   SpatialLockError,
   type SpatialFix,
 } from '@/lib/H3SpatialLock';
+import {
+  SERIAL_RETICLE,
+  SerialPlateError,
+  captureSerialCrop,
+  preloadOcr,
+  readPlateTokens,
+} from '@/lib/SerialPlateReader';
 import { formatTctc, parseTctc, shortAssetId, truncateHash } from '@/lib/format';
 import { Badge, Button, Field, MetricRow, Modal, Notice, Tabs, TextInput } from './ui/Primitives';
 import { ReserveSizingCard, computeSizing, HORIZONS } from './ReserveSizing';
@@ -185,6 +192,14 @@ function MachineryTrack({
   const [cameraOn, setCameraOn] = useState(false);
   const [capture, setCapture] = useState<string | null>(null);
   const [serial, setSerial] = useState('');
+  const [candidates, setCandidates] = useState<string[] | null>(null);
+  const [reading, setReading] = useState(false);
+  const [readError, setReadError] = useState<{ title: string; detail?: string } | null>(null);
+  const [typedManually, setTypedManually] = useState(false);
+
+  useEffect(() => {
+    preloadOcr();
+  }, []);
   const [declared, setDeclared] = useState('2.5');
   const [horizon, setHorizon] = useState<number>(HORIZONS.movable[0]);
   const { pending, error, result, submit } = useRegistration(onRegistered);
@@ -214,16 +229,42 @@ function MachineryTrack({
     }
   }, []);
 
-  /** Freeze the plate so the operator can read the serial off the still while typing it. */
-  const capturePlate = useCallback(() => {
+  /**
+   * Capture the plate and read it.
+   *
+   * The serial is taken from what the camera sees, not from what the merchant types. A typo here
+   * is not a cosmetic problem: the claim sweep reads the real plate, so a mistyped registration
+   * would hash to something no future claim can ever match, locking the merchant out of their own
+   * asset with nothing on screen to explain it.
+   */
+  const capturePlate = useCallback(async () => {
     const video = videoRef.current;
     if (!video) return;
-    const canvas = document.createElement('canvas');
-    canvas.width = 640;
-    canvas.height = Math.round((640 * video.videoHeight) / Math.max(1, video.videoWidth));
-    canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height);
-    setCapture(canvas.toDataURL('image/webp', 0.7));
+
+    const still = document.createElement('canvas');
+    still.width = 640;
+    still.height = Math.round((640 * video.videoHeight) / Math.max(1, video.videoWidth));
+    still.getContext('2d')?.drawImage(video, 0, 0, still.width, still.height);
+
+    // Three crops of the same frame, so a marginal read gets more than one chance.
+    const crops = [captureSerialCrop(video), captureSerialCrop(video, 4), captureSerialCrop(video, 2)];
+
+    setCapture(still.toDataURL('image/webp', 0.7));
     stopCamera();
+    setReading(true);
+    setReadError(null);
+
+    try {
+      const { candidates: found } = await readPlateTokens(crops);
+      setCandidates(found);
+      if (found.length > 0) setSerial(found[0]);
+    } catch (cause) {
+      const plateError = cause as SerialPlateError;
+      setReadError({ title: plateError.message, detail: plateError.detail });
+      setCandidates([]);
+    } finally {
+      setReading(false);
+    }
   }, [stopCamera]);
 
   const normalisedSerial = serial.trim().toUpperCase();
@@ -254,12 +295,23 @@ function MachineryTrack({
         <div className="relative overflow-hidden rounded-[3px] border border-hairline bg-ink">
           <video ref={videoRef} playsInline muted className="block aspect-[4/3] w-full object-cover" />
           <svg className="pointer-events-none absolute inset-0 size-full" aria-hidden>
-            <rect x="10%" y="34%" width="80%" height="32%" fill="none" stroke="rgba(255,255,255,0.6)" strokeWidth="1" strokeDasharray="5 5" />
+            <rect
+              x={`${SERIAL_RETICLE.x * 100}%`}
+              y={`${SERIAL_RETICLE.y * 100}%`}
+              width={`${SERIAL_RETICLE.width * 100}%`}
+              height={`${SERIAL_RETICLE.height * 100}%`}
+              fill="none"
+              stroke="#8C733E"
+              strokeWidth="1.5"
+            />
           </svg>
           <div className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-[rgba(31,36,47,0.72)] px-3 py-1.5">
             <span className="eyebrow text-white/80">Frame the serial plate</span>
-            <button onClick={capturePlate} className="focus-ring rounded-[2px] bg-white px-2.5 py-1 text-[10px] font-medium text-ink">
-              Capture
+            <button
+              onClick={() => void capturePlate()}
+              className="focus-ring rounded-[2px] bg-white px-2.5 py-1 text-[10px] font-medium text-ink"
+            >
+              Capture &amp; read
             </button>
           </div>
         </div>
@@ -270,17 +322,58 @@ function MachineryTrack({
         </Button>
       )}
 
+      {reading ? (
+        <Notice tone="steel" title="Reading the plate…" icon={<Loader2 size={12} className="animate-spin" />} />
+      ) : null}
+
+      {candidates && candidates.length > 0 ? (
+        <div>
+          <p className="eyebrow mb-1.5">What the camera read — pick the serial</p>
+          <div className="flex flex-wrap gap-1.5">
+            {candidates.map((candidate) => (
+              <button
+                key={candidate}
+                onClick={() => {
+                  setSerial(candidate);
+                  setTypedManually(false);
+                }}
+                className={`tabular focus-ring rounded-[2px] border px-2 py-1 text-[11px] transition-colors ${
+                  serial === candidate && !typedManually
+                    ? 'border-ink bg-ink text-paper'
+                    : 'border-hairline-strong text-slate-strong hover:bg-[rgba(31,36,47,0.04)]'
+                }`}
+              >
+                {candidate}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {readError ? <Notice tone="rust" title={readError.title}>{readError.detail}</Notice> : null}
+
       <Field
         label="Serial number"
-        hint="Normalised to uppercase before hashing, so the same plate always yields the same identity."
+        hint="Taken from the plate, not typed from memory — a claim reads the real plate, so a serial that differs from it could never be matched."
       >
         <TextInput
           value={serial}
-          onChange={(event) => setSerial(event.target.value)}
-          placeholder="e.g. TG-9500-DE-4471"
+          onChange={(event) => {
+            setSerial(event.target.value);
+            setTypedManually(true);
+          }}
+          placeholder={capture ? 'Pick one above, or correct it here' : 'Capture the plate first'}
           spellCheck={false}
         />
       </Field>
+
+      {typedManually && candidates && candidates.length > 0 && !candidates.includes(normalisedSerial) ? (
+        <Notice tone="ochre" title="That is not what the camera read">
+          A future claim reads this plate again and must produce the same value. If the camera
+          cannot read it as {normalisedSerial ? <span className="tabular">{normalisedSerial}</span> : 'this'},
+          the claim will be refused. Prefer one of the readings above unless you are certain.
+        </Notice>
+      ) : null}
 
       <ValueField value={declared} onChange={setDeclared} />
 

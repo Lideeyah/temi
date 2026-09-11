@@ -302,6 +302,55 @@ export function captureSerialCrop(video: HTMLVideoElement, scale = 3): HTMLCanva
 }
 
 /**
+ * Read a plate at registration time, before any asset id exists to match against.
+ *
+ * Registration cannot simply trust a typed serial. If a merchant types `TG9500DE4471` while the
+ * plate actually reads `TG9500DE447I`, registration succeeds and then *every future claim fails*
+ * — because the claim reads the real plate and hashes to something else. The merchant would be
+ * permanently locked out of an asset they own, with nothing on screen ever explaining why.
+ *
+ * So the candidates come from the camera, and the merchant confirms one.
+ */
+export async function readPlateTokens(
+  crops: HTMLCanvasElement[],
+): Promise<{ rawText: string; candidates: string[] }> {
+  let worker: TesseractWorker;
+  try {
+    worker = await getWorker();
+  } catch (cause) {
+    throw new SerialPlateError(
+      'ERR_OCR_UNAVAILABLE',
+      'ERR_OCR_UNAVAILABLE: on-device OCR failed to start',
+      cause instanceof Error ? cause.message : undefined,
+    );
+  }
+
+  const transcripts: string[] = [];
+  for (const crop of crops) {
+    const { data } = await worker.recognize(crop);
+    const text = (data.text ?? '').trim();
+    if (text) transcripts.push(text);
+  }
+
+  const rawText = transcripts.join(' ');
+  if (!rawText) {
+    throw new SerialPlateError(
+      'ERR_NO_TEXT_READ',
+      'ERR_NO_TEXT_READ: nothing legible on the plate',
+      'Hold the plate inside the box, steady and well lit, and capture again.',
+    );
+  }
+
+  // Longest first: a serial is usually the longest alphanumeric run on a plate.
+  const candidates = tokenise(rawText)
+    .filter((token) => token.length >= 5)
+    .sort((a, b) => b.length - a.length)
+    .slice(0, 8);
+
+  return { rawText, candidates };
+}
+
+/**
  * Read the plate from one or more captured crops and match it against the registered asset.
  *
  * Several crops are tried because a single frame mid-sweep is often motion-blurred; the first
