@@ -237,6 +237,7 @@ export function BentoDashboard() {
               onCreateVault={(params) =>
                 void account.createVault({ ...params, regionId: region.id })
               }
+              onOpenVault={(params) => account.openVault({ ...params, regionId: region.id })}
               onUseWallet={() => setAccountDrawer('Connect a Web3 wallet')}
               onInitialize={(monthly) => void initializeVault(monthly)}
               rateLine={

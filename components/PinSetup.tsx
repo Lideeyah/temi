@@ -23,6 +23,7 @@ export function PinSetup({
   busy,
   error,
   onConfirm,
+  mode = 'create',
 }: {
   businessName: string;
   onBusinessNameChange: (name: string) => void;
@@ -31,6 +32,15 @@ export function PinSetup({
   busy: boolean;
   error: { title: string; detail?: string } | null;
   onConfirm: (params: { pin: string; biometricEnabled: boolean }) => void;
+  /**
+   * Signing in is not setting up.
+   *
+   * A merchant returning on a new handset already has a PIN. Asking them to confirm it means
+   * asking them to type a secret twice to prove they remember it, which proves nothing — the
+   * chain lookup does that. Asking for a business name is worse: they already named their shop,
+   * and whatever they type here would be a second answer to a question already settled.
+   */
+  mode?: 'create' | 'signin';
 }) {
   const [pin, setPin] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -39,9 +49,14 @@ export function PinSetup({
 
   const isWeak = (value: string) => /^(\d)\1{3}$/.test(value);
 
-  const mismatch = confirm.length === 4 && confirm !== pin;
-  const weak = pin.length === 4 && isWeak(pin);
-  const ready = pin.length === 4 && confirm === pin && businessName.trim().length >= 2 && !weak;
+  const signingIn = mode === 'signin';
+  const mismatch = !signingIn && confirm.length === 4 && confirm !== pin;
+  // A weak PIN is refused when choosing one. Refusing it at sign-in would lock out a merchant
+  // whose vault already uses it — the time to object has passed.
+  const weak = !signingIn && pin.length === 4 && isWeak(pin);
+  const ready = signingIn
+    ? pin.length === 4
+    : pin.length === 4 && confirm === pin && businessName.trim().length >= 2 && !weak;
 
   /**
    * Why the button is off.
@@ -50,8 +65,11 @@ export function PinSetup({
    * discover what is missing. Deriving the reason from the same conditions that disable it means
    * a new rule can never silently strand someone.
    */
-  const blockReason =
-    businessName.trim().length < 2
+  const blockReason = signingIn
+    ? pin.length !== 4
+      ? 'Enter your 4-digit PIN.'
+      : null
+    : businessName.trim().length < 2
       ? 'Enter your trading entity name above.'
       : pin.length !== 4
         ? 'Choose a 4-digit PIN.'
@@ -72,6 +90,7 @@ export function PinSetup({
         </div>
       </div>
 
+      {signingIn ? null : (
       <label className="block">
         <span className="eyebrow mb-1.5 block">Trading entity name</span>
         <input
@@ -81,17 +100,18 @@ export function PinSetup({
           className="focus-ring w-full rounded-[3px] border border-hairline-strong bg-paper-raised px-3 py-2.5 text-[13px] text-ink placeholder:text-slate-soft"
         />
       </label>
+      )}
 
-      {stage === 'set' ? (
+      {signingIn || stage === 'set' ? (
         <>
           <PinField
-            label="Set 4-digit merchant security PIN"
+            label={signingIn ? 'Your 4-digit PIN' : 'Set 4-digit merchant security PIN'}
             value={pin}
             onChange={setPin}
             onComplete={(value) => {
               // Advancing a PIN we are going to reject later strands the merchant on a screen
               // that cannot explain itself.
-              if (!isWeak(value)) setStage('confirm');
+              if (!signingIn && !isWeak(value)) setStage('confirm');
             }}
             invalid={weak}
             autoFocus
@@ -177,7 +197,13 @@ export function PinSetup({
         )}
       >
         {busy ? <Loader2 size={15} className="animate-spin" /> : null}
-        {busy ? 'Creating your vault…' : 'Create my vault'}
+        {busy
+          ? signingIn
+            ? 'Opening your vault…'
+            : 'Creating your vault…'
+          : signingIn
+            ? 'Open my vault'
+            : 'Create my vault'}
         {!busy ? <ArrowRight size={14} strokeWidth={1.75} /> : null}
       </button>
 

@@ -31,6 +31,7 @@ export function VaultSetup({
   accountError,
   biometricFellBack,
   onCreateVault,
+  onOpenVault,
   onUseWallet,
   onInitialize,
   rateLine,
@@ -52,6 +53,12 @@ export function VaultSetup({
   /** Escape hatch to a conventional wallet. */
   onUseWallet: () => void;
   /** Stage 2 — fund the first allocation, in wei of tCTC. */
+  /** Open a vault that already exists. Resolves 'not-found' when the chain has none. */
+  onOpenVault: (params: {
+    pin: string;
+    phoneE164: string;
+    keyShare: string;
+  }) => Promise<'opened' | 'not-found'>;
   onInitialize: (monthlyWei: bigint) => void;
   /** The proven exchange rate, shown against the conversion it governs. */
   rateLine?: React.ReactNode;
@@ -77,6 +84,9 @@ export function VaultSetup({
   // Phase 1 hands back the verified number and the server's half of the key.
   const [verified, setVerified] = useState<{ phoneE164: string; keyShare: string } | null>(null);
   const [businessName, setBusinessName] = useState('');
+  /** Which of the two doors the merchant chose. Null until they say. */
+  const [intent, setIntent] = useState<'create' | 'signin' | null>(null);
+  const [notFound, setNotFound] = useState(false);
 
   const stage: 0 | 1 | 2 = connected ? 1 : 0;
 
@@ -116,7 +126,48 @@ export function VaultSetup({
       ) : null}
 
       {stage === 0 ? (
-        !verified ? (
+        !intent ? (
+          /*
+           * Ask first, because the two paths are genuinely different.
+           *
+           * Both derive the same key from the same number and PIN, so a returning merchant could
+           * always reach their vault through "set-up". What they could not do was find out they
+           * had mistyped: a wrong PIN derives a different, valid, empty account, and they would
+           * have been shown an empty vault with no explanation. Knowing which they intended lets
+           * the app check the chain and say so.
+           */
+          <div className="space-y-3">
+            <p className="text-[13px] leading-relaxed text-slate-strong">
+              Do you already have a Tèmi vault?
+            </p>
+            <div className="grid gap-2.5 sm:grid-cols-2">
+              <button
+                onClick={() => setIntent('create')}
+                className="focus-ring rounded-[3px] border border-hairline-strong px-4 py-3.5 text-left transition-colors hover:bg-[rgba(31,36,47,0.03)]"
+              >
+                <span className="block text-[13px] font-medium text-ink">No, this is my first</span>
+                <span className="mt-1 block text-[11px] leading-snug text-slate-soft">
+                  Verify your number and choose a PIN. Takes about a minute.
+                </span>
+              </button>
+              <button
+                onClick={() => setIntent('signin')}
+                className="focus-ring rounded-[3px] border border-hairline-strong px-4 py-3.5 text-left transition-colors hover:bg-[rgba(31,36,47,0.03)]"
+              >
+                <span className="block text-[13px] font-medium text-ink">Yes, open it</span>
+                <span className="mt-1 block text-[11px] leading-snug text-slate-soft">
+                  New phone, or cleared browser. Your number and PIN bring it back.
+                </span>
+              </button>
+            </div>
+            <button
+              onClick={onUseWallet}
+              className="focus-ring w-full text-center text-[10.5px] text-slate-soft underline underline-offset-2"
+            >
+              Use a Web3 wallet instead
+            </button>
+          </div>
+        ) : !verified ? (
           <PhoneVerification
             region={region}
             onRegionChange={changeRegion}
@@ -124,22 +175,54 @@ export function VaultSetup({
           />
         ) : (
           <div className="space-y-4">
+            {notFound ? (
+              <div className="border border-hairline border-l-2 border-l-rust bg-[rgba(140,74,74,0.06)] px-3.5 py-2.5">
+                <p className="text-[11.5px] font-medium text-rust">
+                  No vault for {verified.phoneE164} with that PIN
+                </p>
+                <p className="mt-1 text-[11px] leading-relaxed text-slate-strong">
+                  Nothing has been changed and nothing is lost — a PIN that is off by one digit
+                  derives a different account, so this is what a typo looks like. Try the PIN
+                  again, or{' '}
+                  <button
+                    onClick={() => {
+                      setNotFound(false);
+                      setIntent('create');
+                    }}
+                    className="focus-ring underline underline-offset-2"
+                  >
+                    create a new vault for this number
+                  </button>
+                  .
+                </p>
+              </div>
+            ) : null}
             <PinSetup
+              mode={intent}
               businessName={businessName}
               onBusinessNameChange={setBusinessName}
               phoneE164={verified.phoneE164}
               biometricAvailable={biometricAvailable}
               busy={busy}
               error={accountError}
-              onConfirm={({ pin, biometricEnabled }) =>
+              onConfirm={({ pin, biometricEnabled }) => {
+                setNotFound(false);
+                if (intent === 'signin') {
+                  void onOpenVault({
+                    pin,
+                    phoneE164: verified.phoneE164,
+                    keyShare: verified.keyShare,
+                  }).then((result) => setNotFound(result === 'not-found'));
+                  return;
+                }
                 onCreateVault({
                   pin,
                   phoneE164: verified.phoneE164,
                   keyShare: verified.keyShare,
                   businessName,
                   biometricEnabled,
-                })
-              }
+                });
+              }}
             />
             <button
               onClick={onUseWallet}

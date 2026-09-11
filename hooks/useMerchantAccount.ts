@@ -3,7 +3,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createWalletClient, custom, http, type Address, type WalletClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { creditcoinTestnet } from '@/lib/chains';
+import { creditcoinPublicClient, creditcoinTestnet } from '@/lib/chains';
+import { TEMI_VAULT_ADDRESS } from '@/lib/config';
+import { temiVaultAbi } from '@/lib/abi';
+import { deriveAccountKey } from '@/lib/MerchantIdentity';
 import { isPlatformAuthenticatorAvailable } from '@/lib/MerchantAccount';
 import {
   IdentityError,
@@ -109,6 +112,68 @@ export function useMerchantAccount() {
     [requestSponsorship],
   );
 
+  /**
+   * Open a vault that already exists, from a number and a PIN.
+   *
+   * This is the flow a merchant uses on a new handset, and it is not the same as creating one —
+   * though until now it was the only flow there was, and that was dangerous. The key is derived,
+   * never stored, so a mistyped PIN does not fail: it derives a *different*, valid, empty account.
+   * The merchant would have been shown a vault with nothing in it and no explanation, and would
+   * reasonably conclude their savings were gone.
+   *
+   * So the derived address is looked up on chain before anything is written to this device. A
+   * vault that exists is opened; one that does not is reported as what it is — "no vault for this
+   * number and PIN" — leaving the merchant to retry rather than quietly stranding them in an
+   * empty account that is not theirs.
+   */
+  const openVault = useCallback(
+    async (params: {
+      pin: string;
+      phoneE164: string;
+      keyShare: string;
+      regionId: string;
+    }): Promise<'opened' | 'not-found'> => {
+      setBusy(true);
+      setError(null);
+      try {
+        const key = await deriveAccountKey(params.pin, params.phoneE164, params.keyShare);
+        const address = privateKeyToAccount(key).address;
+
+        let exists = false;
+        if (TEMI_VAULT_ADDRESS) {
+          const contract = { address: TEMI_VAULT_ADDRESS, abi: temiVaultAbi } as const;
+          const [reserve, assets] = await Promise.all([
+            creditcoinPublicClient.readContract({ ...contract, functionName: 'getReserve', args: [address] }),
+            creditcoinPublicClient.readContract({ ...contract, functionName: 'getOwnedAssets', args: [address] }),
+          ]);
+          const r = reserve as { lifetimeDeposits: bigint };
+          exists = r.lifetimeDeposits > 0n || (assets as readonly unknown[]).length > 0;
+        }
+
+        if (!exists) return 'not-found';
+
+        // Only now is anything written to this device.
+        const { record: restored } = await createIdentity({
+          ...params,
+          businessName: '',
+          biometricEnabled: false,
+          derivedKey: key,
+        });
+        setPrivateKey(key);
+        setRecord(restored);
+        await requestSponsorship(address);
+        return 'opened';
+      } catch (cause) {
+        const identityError = cause as IdentityError;
+        setError({ title: identityError.message, detail: identityError.detail });
+        return 'not-found';
+      } finally {
+        setBusy(false);
+      }
+    },
+    [requestSponsorship],
+  );
+
   /** Unlock with the biometric, when this device has it armed. */
   const unlockWithTouch = useCallback(async (): Promise<boolean> => {
     const active = record ?? (await loadIdentity());
@@ -204,6 +269,7 @@ export function useMerchantAccount() {
     biometricAvailable,
     sponsorship,
     createVault,
+    openVault,
     unlockWithPin,
     unlockWithTouch,
     biometricArmed: hasBiometricUnlock(record),

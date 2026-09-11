@@ -234,10 +234,13 @@ export async function createIdentity(params: {
   regionId: string;
   businessName: string;
   biometricEnabled: boolean;
+  /** A key already derived from the same inputs — sign-in derives once to look the vault up on
+   *  chain, and there is no reason to spend another 600,000 iterations proving it twice. */
+  derivedKey?: Hex;
 }): Promise<{ record: IdentityRecord; privateKey: Hex }> {
   const { pin, phoneE164, keyShare, regionId, businessName, biometricEnabled } = params;
 
-  const privateKey = await deriveAccountKey(pin, phoneE164, keyShare);
+  const privateKey = params.derivedKey ?? (await deriveAccountKey(pin, phoneE164, keyShare));
   const address = privateKeyToAccount(privateKey).address;
 
   const iv = crypto.getRandomValues(new Uint8Array(12));
