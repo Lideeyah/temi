@@ -451,8 +451,37 @@ function NativeTab({
   const [pending, setPending] = useState(false);
   const [txHash, setTxHash] = useState<Hex | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [balance, setBalance] = useState<bigint | null>(null);
 
   const wei = parseTctc(amount);
+
+  /**
+   * What this account can actually allocate.
+   *
+   * A merchant onboarded by phone is sponsored 0.05 tCTC, which is gas and nothing more. This tab
+   * used to offer them a 1.0 tCTC default and let them send a transaction that could only revert,
+   * then explain the out-of-funds afterwards. The balance belongs on screen before the attempt,
+   * not in the error that follows it.
+   */
+  const GAS_BUFFER = parseTctc('0.01');
+  const spendable =
+    balance === null ? null : balance > GAS_BUFFER ? balance - GAS_BUFFER : 0n;
+  const shortfall = spendable !== null && wei > spendable;
+
+  const refreshBalance = useCallback(async () => {
+    if (!account) return setBalance(null);
+    try {
+      setBalance(await creditcoinPublicClient.getBalance({ address: account }));
+    } catch {
+      // A balance we could not read is not a reason to block the attempt — leave it unknown and
+      // let the chain be the judge, as it was before.
+      setBalance(null);
+    }
+  }, [account]);
+
+  useEffect(() => {
+    void refreshBalance();
+  }, [refreshBalance]);
 
   const deposit = useCallback(async () => {
     if (!walletClient || !account || !TEMI_VAULT_ADDRESS || wei <= 0n) return;
@@ -470,13 +499,14 @@ function NativeTab({
       });
       await creditcoinPublicClient.waitForTransactionReceipt({ hash });
       setTxHash(hash);
+      void refreshBalance();
       onDeposited();
     } catch (cause) {
       setError(describeTxFailure(cause));
     } finally {
       setPending(false);
     }
-  }, [walletClient, account, wei, onDeposited]);
+  }, [walletClient, account, wei, onDeposited, refreshBalance]);
 
   return (
     <div className="space-y-4">
@@ -485,7 +515,14 @@ function NativeTab({
         cc3-testnet · direct settlement
       </Badge>
 
-      <Field label="Amount" hint="Split 85% into your personal vault, 15% into the mutual buffer.">
+      <Field
+        label="Amount"
+        hint={
+          balance === null
+            ? 'Split 85% into your personal vault, 15% into the mutual buffer.'
+            : `Balance ${formatTctc(balance, 4)} tCTC · up to ${formatTctc(spendable ?? 0n, 4)} allocatable after gas`
+        }
+      >
         <div className="relative">
           <TextInput
             value={amount}
@@ -517,10 +554,33 @@ function NativeTab({
         </Notice>
       ) : null}
 
-      <Button block onClick={() => void deposit()} disabled={pending || !walletClient || wei <= 0n}>
+      {/* Say what is wrong while it can still be fixed, rather than after a reverted transaction.
+          The local rail is named because for most merchants that is how tCTC gets here at all. */}
+      {shortfall ? (
+        <Notice tone="ochre" title="More than this account holds">
+          {spendable === 0n
+            ? 'This account holds gas and nothing else yet. Fund it on your local rail first, or send tCTC to this address — then allocate it here.'
+            : `You can allocate up to ${formatTctc(spendable ?? 0n, 4)} tCTC, keeping ${formatTctc(GAS_BUFFER, 2)} back for gas.`}
+        </Notice>
+      ) : null}
+
+      <Button
+        block
+        onClick={() => void deposit()}
+        disabled={pending || !walletClient || wei <= 0n || shortfall}
+      >
         {pending ? <Loader2 size={14} className="animate-spin" /> : null}
         {pending ? 'Confirming…' : `Deposit ${amount || '0'} tCTC`}
       </Button>
+
+      {spendable !== null && spendable > 0n ? (
+        <button
+          onClick={() => setAmount(formatTctcExact(spendable))}
+          className="focus-ring w-full text-center text-[10.5px] text-slate-soft underline underline-offset-2"
+        >
+          Allocate everything this account can spare
+        </button>
+      ) : null}
     </div>
   );
 }
