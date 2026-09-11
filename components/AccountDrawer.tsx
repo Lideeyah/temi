@@ -32,6 +32,7 @@ export function AccountDrawer({
 }) {
   const [tab, setTab] = useState<TabId>('merchant');
   const [pin, setPin] = useState('');
+  const [confirmForget, setConfirmForget] = useState(false);
 
   // Close as soon as an account is live — nobody wants to dismiss a dialog they are done with.
   useEffect(() => {
@@ -102,12 +103,44 @@ export function AccountDrawer({
               {account.busy ? 'Unlocking…' : 'Unlock my vault'}
             </Button>
 
-            <button
-              onClick={() => void account.forget()}
-              className="focus-ring w-full text-center text-[10.5px] text-slate-soft underline underline-offset-2"
-            >
-              Restore a different vault on this device
-            </button>
+            {/* Removing the record is recoverable — the key is derived, so the same number and
+                PIN bring the vault back — but it is still the one button here that destroys
+                something, and it was firing on a single tap. */}
+            {confirmForget ? (
+              <div className="border border-hairline border-l-2 border-l-ochre bg-[rgba(140,115,62,0.06)] px-3 py-2.5">
+                <p className="text-[11px] font-medium text-ochre">
+                  Remove {account.record?.businessName || 'this vault'} from this device?
+                </p>
+                <p className="mt-1 text-[10.5px] leading-relaxed text-slate-strong">
+                  The vault itself is on chain and is not affected. This only clears what this
+                  browser remembers, so you would sign in again with your number and PIN.
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    onClick={() => {
+                      setConfirmForget(false);
+                      void account.forget();
+                    }}
+                    className="focus-ring rounded-[2px] border border-rust px-2.5 py-1 text-[10.5px] text-rust transition-colors hover:bg-[rgba(140,74,74,0.08)]"
+                  >
+                    Remove it
+                  </button>
+                  <button
+                    onClick={() => setConfirmForget(false)}
+                    className="focus-ring rounded-[2px] border border-hairline px-2.5 py-1 text-[10.5px] text-slate-strong"
+                  >
+                    Keep it
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmForget(true)}
+                className="focus-ring w-full text-center text-[10.5px] text-slate-soft underline underline-offset-2"
+              >
+                Use a different vault on this device
+              </button>
+            )}
           </div>
         ) : (
           <div className="space-y-4">
@@ -280,16 +313,23 @@ export function AccountPill({
             </a>
 
             {account.kind === 'merchant' ? (
-              <button
-                onClick={() => {
-                  account.lock();
-                  setMenuOpen(false);
-                }}
-                className="focus-ring inline-flex w-full items-center gap-1.5 rounded-[2px] border border-hairline px-2 py-1.5 text-[10.5px] text-slate-strong transition-colors hover:bg-[rgba(31,36,47,0.04)]"
-              >
-                <LogOut size={10} strokeWidth={2} />
-                Lock vault
-              </button>
+              <>
+                <button
+                  onClick={() => {
+                    account.lock();
+                    setMenuOpen(false);
+                  }}
+                  className="focus-ring inline-flex w-full items-center gap-1.5 rounded-[2px] border border-hairline px-2 py-1.5 text-[10.5px] text-slate-strong transition-colors hover:bg-[rgba(31,36,47,0.04)]"
+                >
+                  <LogOut size={10} strokeWidth={2} />
+                  Sign out
+                </button>
+                {/* Signing out drops the key from memory. It does not touch the vault, which is
+                    on chain, and it does not touch this device's record — the PIN reopens it. */}
+                <p className="mt-1.5 text-[9.5px] leading-snug text-slate-soft">
+                  Your PIN reopens it on this device. Nothing on chain changes.
+                </p>
+              </>
             ) : null}
           </div>
         </>
