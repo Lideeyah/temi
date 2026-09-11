@@ -30,4 +30,17 @@ export const ATTESTCOIN_PROVER_URL =
  */
 export const NGN_PER_TCTC = Number(process.env.NEXT_PUBLIC_NGN_PER_TCTC ?? 1450);
 
+/**
+ * The block TemiVault was deployed in.
+ *
+ * Event queries started at 'earliest', which asks a public node to scan every block since genesis
+ * — millions of them — to find events from a contract a few hundred blocks old. cc3-testnet
+ * answers that with `query timeout of 10 seconds exceeded`. Anchoring here turns the same query
+ * into a few hundred blocks.
+ *
+ * Override when redeploying; `npm run drift` reports the address, and the creation transaction
+ * gives the block.
+ */
+export const VAULT_DEPLOY_BLOCK = BigInt(process.env.NEXT_PUBLIC_VAULT_DEPLOY_BLOCK ?? '5468547');
+
 export const isVaultConfigured = TEMI_VAULT_ADDRESS !== null;

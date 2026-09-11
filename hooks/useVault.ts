@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { Address } from 'viem';
 import { creditcoinPublicClient } from '@/lib/chains';
-import { TEMI_VAULT_ADDRESS } from '@/lib/config';
+import { TEMI_VAULT_ADDRESS, VAULT_DEPLOY_BLOCK } from '@/lib/config';
 import { temiVaultAbi } from '@/lib/abi';
 
 export interface VaultAsset {
@@ -80,6 +80,9 @@ export interface VaultState {
   blockNumber: bigint | null;
   /** True once this operator has actually funded or registered something on-chain. */
   initialized: boolean;
+  /** True once a read has actually succeeded. Absence of deposits and failure to read are
+   *  different facts, and only one of them means "this merchant has not started". */
+  hasRead: boolean;
   loading: boolean;
   error: string | null;
 }
@@ -96,6 +99,7 @@ const EMPTY: VaultState = {
   revenue: null,
   blockNumber: null,
   initialized: false,
+  hasRead: false,
   loading: true,
   error: null,
 };
@@ -227,7 +231,7 @@ export function useVault(address: Address | null, pollMs = 12_000) {
               ],
             },
             args: { claimant: address },
-            fromBlock: 'earliest',
+            fromBlock: VAULT_DEPLOY_BLOCK,
           })
           .catch(() => []);
 
@@ -304,6 +308,7 @@ export function useVault(address: Address | null, pollMs = 12_000) {
         // The honest on-chain signal that a merchant has started: they have funded a reserve or
         // bound an asset. Anything else is an empty ledger dressed up as a dashboard.
         initialized: reserve.lifetimeDeposits > 0n || (assets as readonly VaultAsset[]).length > 0,
+        hasRead: true,
         loading: false,
         error: null,
       });

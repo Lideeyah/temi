@@ -205,9 +205,27 @@ export function BentoDashboard() {
           </div>
         ) : null}
 
+        {/* A read that failed is not a merchant who has not started. Showing "establish your
+            vault" to someone who funded one last week is the worst reading of an RPC timeout:
+            it tells them their money is gone. Wait for a read that actually succeeded. */}
+        {isVaultConfigured && !vault.loading && !vault.hasRead && vault.error ? (
+          <div className="mx-auto w-full max-w-3xl">
+            <Notice tone="rust" title="Could not read your vault">
+              {vault.error} — your funds are unaffected; this is a failure to read cc3-testnet,
+              not a change to your position.{' '}
+              <button
+                onClick={() => void vault.refresh()}
+                className="focus-ring underline underline-offset-2"
+              >
+                Try again
+              </button>
+            </Notice>
+          </div>
+        ) : null}
+
         {/* Until a merchant has funded or registered anything there is no ledger to render —
             only zeros. Show them the one thing they can act on instead. */}
-        {isVaultConfigured && !vault.loading && !vault.initialized ? (
+        {isVaultConfigured && !vault.loading && vault.hasRead && !vault.initialized ? (
           <div className="mx-auto w-full max-w-3xl">
             <VaultSetup
               connected={account.connected}
