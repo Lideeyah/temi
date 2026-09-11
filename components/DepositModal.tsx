@@ -590,6 +590,26 @@ function NativeTab({
 /* ================================================================== */
 
 /**
+ * Block until this RPC connection can see enough balance to cover an allocation.
+ *
+ * Polls rather than trusting a receipt from elsewhere, because the question is not "did the
+ * transfer land" but "can the node that is about to price my transaction see that it landed".
+ * Gives up after a few seconds and lets the attempt proceed: a slow read is not proof of a
+ * missing transfer, and the chain remains the final judge either way.
+ */
+async function waitForFunds(address: Address, needed: bigint, timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      if ((await creditcoinPublicClient.getBalance({ address })) >= needed) return;
+    } catch {
+      // A failed read is indistinguishable from a lagging one; keep waiting.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 750));
+  }
+}
+
+/**
  * Turn an EVM failure into something a merchant can act on.
  *
  * viem surfaces an out-of-funds condition as `reverted with the following reason:` and then
@@ -597,7 +617,13 @@ function NativeTab({
  */
 function describeTxFailure(cause: unknown): string {
   const raw = cause instanceof Error ? cause.message : String(cause);
-  if (/insufficient funds|exceeds the balance|InsufficientFunds/i.test(raw)) {
+  // The last pattern is the empty-reason shape: viem reports an out-of-funds rejection as a
+  // revert with nothing after the colon, which is what made this failure look like the contract
+  // refusing rather than the account being short.
+  if (
+    /insufficient funds|exceeds the balance|InsufficientFunds/i.test(raw) ||
+    /reverted with the following reason:\s*$/i.test(raw.trim())
+  ) {
     return 'Your account does not hold enough tCTC to cover this allocation and its gas.';
   }
   if (/User rejected|denied transaction|rejected the request/i.test(raw)) {
@@ -662,11 +688,29 @@ function TrugiTab({
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ address: account, amount: RELAY_AMOUNT.toString() }),
       });
-      const body = (await response.json()) as { error?: string; detail?: string };
+      const body = (await response.json()) as { error?: string; detail?: string; hash?: Hex };
       if (!response.ok) {
         setError(body.detail ? `${body.error}. ${body.detail}` : (body.error ?? 'Settlement failed'));
         return;
       }
+
+      /*
+       * Wait for this browser's own node to see the money.
+       *
+       * The relayer waits for its receipt before answering, so the transfer is final by the time
+       * we get here — final on the node the relayer used. Public RPC sits behind a load balancer,
+       * and the node answering the browser can be a block or two behind, which means the very
+       * next writeContract is priced against a balance that does not yet include the transfer and
+       * is refused for insufficient funds. It surfaces as "reverted with the following reason:"
+       * and then nothing, which reads like a contract rejection and is not one.
+       *
+       * So confirm against the same connection that will send the deposit, and only then send it.
+       */
+      setStep('Confirming settlement…');
+      if (body.hash) {
+        await creditcoinPublicClient.waitForTransactionReceipt({ hash: body.hash });
+      }
+      await waitForFunds(account, RELAY_AMOUNT);
 
       setStep('Allocating into your vault…');
       const hash = await walletClient.writeContract({
