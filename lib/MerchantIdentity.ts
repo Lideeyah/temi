@@ -50,6 +50,11 @@ export interface IdentityRecord {
   /** Lets us reject a wrong PIN without deriving a whole account first. */
   pinCheck: string;
   biometricEnabled: boolean;
+  /** WebAuthn credential id, when one-touch unlock is armed on this device. */
+  biometricCredentialId?: string;
+  /** The derived key, sealed under a secret only this device's biometric can produce. */
+  biometricCiphertext?: string;
+  biometricIv?: string;
   /** Consecutive wrong PINs. Reset on success. */
   failedAttempts: number;
   createdAt: number;
@@ -301,6 +306,157 @@ export async function unlockIdentity(record: IdentityRecord, pin: string): Promi
 
   if (record.failedAttempts > 0) await persist({ ...record, failedAttempts: 0 });
   return deriveAccountKey(pin, record.phoneE164, keyShare);
+}
+
+/* ------------------------------------------------------------------ */
+/*                     ONE-TOUCH UNLOCK (OPTIONAL)                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Biometric unlock seals the *derived key*, not the server share.
+ *
+ * The share alone cannot reconstruct an account — the derivation needs the PIN as well — so
+ * sealing the share would still leave a merchant typing four digits, which is not what the
+ * toggle promises. Sealing the finished key under a secret only this handset's biometric can
+ * produce is what actually makes the unlock one touch.
+ *
+ * It is strictly an alternative door to the same vault. The PIN keeps working everywhere, and it
+ * remains the thing the account is derived from — losing this device loses only the convenience.
+ */
+
+const PRF_SALT = new TextEncoder().encode('temi.one-touch.v1');
+
+type PrfResults = { prf?: { enabled?: boolean; results?: { first?: ArrayBuffer } } };
+
+/** Whether this browser can derive a key from the authenticator, not merely prompt with it. */
+export async function canSealWithBiometric(): Promise<boolean> {
+  if (typeof window === 'undefined' || typeof PublicKeyCredential === 'undefined') return false;
+  try {
+    return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+  } catch {
+    return false;
+  }
+}
+
+async function prfSecret(rawId: ArrayBuffer): Promise<ArrayBuffer | null> {
+  try {
+    const assertion = (await navigator.credentials.get({
+      publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        allowCredentials: [{ type: 'public-key', id: rawId }],
+        userVerification: 'required',
+        timeout: 60_000,
+        extensions: { prf: { eval: { first: PRF_SALT } } } as AuthenticationExtensionsClientInputs,
+      },
+    })) as PublicKeyCredential | null;
+    const results = assertion?.getClientExtensionResults() as PrfResults | undefined;
+    return results?.prf?.results?.first ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Arm one-touch unlock, sealing the already-derived key.
+ *
+ * Returns the updated record, or null when the device turned out not to support key derivation —
+ * in which case nothing is stored and the interface must say the PIN is still required, rather
+ * than leaving a toggle on that does nothing.
+ */
+export async function enableBiometricUnlock(
+  record: IdentityRecord,
+  privateKey: Hex,
+): Promise<IdentityRecord | null> {
+  if (typeof navigator === 'undefined' || !navigator.credentials?.create) return null;
+
+  let credential: PublicKeyCredential;
+  try {
+    credential = (await navigator.credentials.create({
+      publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        rp: { name: 'Tèmi' },
+        user: {
+          id: enc.encode(record.address.slice(2, 34)),
+          name: record.phoneE164,
+          displayName: record.businessName || record.phoneE164,
+        },
+        pubKeyCredParams: [
+          { type: 'public-key', alg: -7 },
+          { type: 'public-key', alg: -257 },
+        ],
+        authenticatorSelection: {
+          authenticatorAttachment: 'platform',
+          residentKey: 'required',
+          userVerification: 'required',
+        },
+        timeout: 60_000,
+        extensions: { prf: {} } as AuthenticationExtensionsClientInputs,
+      },
+    })) as PublicKeyCredential;
+  } catch {
+    return null;
+  }
+
+  const extensions = credential.getClientExtensionResults() as PrfResults;
+  if (extensions.prf?.enabled !== true) return null;
+
+  const secret = await prfSecret(credential.rawId);
+  if (!secret) return null;
+
+  const key = await crypto.subtle.importKey('raw', secret, 'AES-GCM', false, ['encrypt', 'decrypt']);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    enc.encode(privateKey),
+  );
+
+  const updated: IdentityRecord = {
+    ...record,
+    biometricEnabled: true,
+    biometricCredentialId: toB64(credential.rawId),
+    biometricCiphertext: toB64(ciphertext),
+    biometricIv: toB64(iv),
+  };
+  await persist(updated);
+  return updated;
+}
+
+/** True when this device can actually skip the PIN for this vault. */
+export function hasBiometricUnlock(record: IdentityRecord | null): boolean {
+  return Boolean(record?.biometricEnabled && record.biometricCredentialId && record.biometricCiphertext);
+}
+
+/** Unlock with the biometric instead of the PIN. */
+export async function unlockWithBiometric(record: IdentityRecord): Promise<Hex> {
+  if (!hasBiometricUnlock(record)) {
+    throw new IdentityError('ERR_NO_IDENTITY', 'One-touch unlock is not set up on this device');
+  }
+
+  const secret = await prfSecret(fromB64(record.biometricCredentialId!).buffer);
+  if (!secret) {
+    throw new IdentityError(
+      'ERR_WRONG_PIN',
+      'Fingerprint check failed',
+      'Enter your PIN instead — it always works.',
+    );
+  }
+
+  try {
+    const key = await crypto.subtle.importKey('raw', secret, 'AES-GCM', false, ['decrypt']);
+    const plaintext = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: fromB64(record.biometricIv!) },
+      key,
+      fromB64(record.biometricCiphertext!),
+    );
+    return new TextDecoder().decode(plaintext) as Hex;
+  } catch {
+    throw new IdentityError(
+      'ERR_WRONG_PIN',
+      'Could not unseal this vault',
+      'Enter your PIN instead — it always works.',
+    );
+  }
 }
 
 /* ------------------------------------------------------------------ */

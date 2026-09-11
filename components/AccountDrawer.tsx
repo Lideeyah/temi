@@ -68,13 +68,25 @@ export function AccountDrawer({
               </p>
             </div>
 
+            {account.biometricArmed ? (
+              <Button
+                variant="outline"
+                block
+                disabled={account.busy}
+                onClick={() => void account.unlockWithTouch()}
+              >
+                <Fingerprint size={14} strokeWidth={1.75} />
+                Unlock with fingerprint
+              </Button>
+            ) : null}
+
             <PinField
-              label="Enter your 4-digit PIN"
+              label={account.biometricArmed ? 'Or enter your 4-digit PIN' : 'Enter your 4-digit PIN'}
               value={pin}
               onChange={setPin}
               onComplete={(value) => void account.unlockWithPin(value)}
               invalid={Boolean(account.error)}
-              autoFocus
+              autoFocus={!account.biometricArmed}
             />
 
             {account.error ? (

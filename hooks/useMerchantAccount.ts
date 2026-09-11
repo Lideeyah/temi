@@ -8,9 +8,12 @@ import { isPlatformAuthenticatorAvailable } from '@/lib/MerchantAccount';
 import {
   IdentityError,
   createIdentity,
+  enableBiometricUnlock,
   forgetIdentity,
+  hasBiometricUnlock,
   loadIdentity,
   unlockIdentity,
+  unlockWithBiometric,
   type IdentityRecord,
 } from '@/lib/MerchantIdentity';
 import { useWallet } from './useWallet';
@@ -40,6 +43,8 @@ export function useMerchantAccount() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ title: string; detail?: string } | null>(null);
   const [sponsorship, setSponsorship] = useState<SponsorResult | null>(null);
+  /** True when a merchant asked for one-touch unlock and this device could not provide it. */
+  const [biometricFellBack, setBiometricFellBack] = useState(false);
 
   useEffect(() => {
     void loadIdentity().then(setRecord);
@@ -80,9 +85,20 @@ export function useMerchantAccount() {
       setError(null);
       try {
         const { record: created, privateKey: key } = await createIdentity(params);
-        setRecord(created);
         setPrivateKey(key);
-        await requestSponsorship(created.address);
+
+        // Arm one-touch unlock only if the device can genuinely seal a key. Where it cannot, the
+        // record keeps the PIN as the only door and the interface says so, rather than leaving a
+        // toggle switched on that does nothing.
+        let active = created;
+        if (params.biometricEnabled) {
+          const sealed = await enableBiometricUnlock(created, key);
+          if (sealed) active = sealed;
+          else setBiometricFellBack(true);
+        }
+        setRecord(active);
+
+        await requestSponsorship(active.address);
       } catch (cause) {
         const identityError = cause as IdentityError;
         setError({ title: identityError.message, detail: identityError.detail });
@@ -92,6 +108,25 @@ export function useMerchantAccount() {
     },
     [requestSponsorship],
   );
+
+  /** Unlock with the biometric, when this device has it armed. */
+  const unlockWithTouch = useCallback(async (): Promise<boolean> => {
+    const active = record ?? (await loadIdentity());
+    if (!active || !hasBiometricUnlock(active)) return false;
+    setBusy(true);
+    setError(null);
+    try {
+      setPrivateKey(await unlockWithBiometric(active));
+      setRecord(active);
+      return true;
+    } catch (cause) {
+      const identityError = cause as IdentityError;
+      setError({ title: identityError.message, detail: identityError.detail });
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }, [record]);
 
   /** Re-derive the account for an existing vault on this device. */
   const unlockWithPin = useCallback(
@@ -170,6 +205,9 @@ export function useMerchantAccount() {
     sponsorship,
     createVault,
     unlockWithPin,
+    unlockWithTouch,
+    biometricArmed: hasBiometricUnlock(record),
+    biometricFellBack,
     lock,
     forget,
 

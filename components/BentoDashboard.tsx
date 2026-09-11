@@ -209,6 +209,7 @@ export function BentoDashboard() {
               busy={initialising || account.busy}
               biometricAvailable={account.biometricAvailable}
               accountError={account.error}
+              biometricFellBack={account.biometricFellBack}
               onCreateVault={(params) =>
                 void account.createVault({ ...params, regionId: region.id })
               }

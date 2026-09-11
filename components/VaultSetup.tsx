@@ -29,6 +29,7 @@ export function VaultSetup({
   busy,
   biometricAvailable,
   accountError,
+  biometricFellBack,
   onCreateVault,
   onUseWallet,
   onInitialize,
@@ -38,6 +39,8 @@ export function VaultSetup({
   busy: boolean;
   biometricAvailable: boolean;
   accountError: { title: string; detail?: string } | null;
+  /** The merchant asked for one-touch unlock and this device could not provide it. */
+  biometricFellBack: boolean;
   /** Stage 0c — create the vault once the number is verified and a PIN chosen. */
   onCreateVault: (params: {
     pin: string;
@@ -102,6 +105,16 @@ export function VaultSetup({
       </div>
 
       <StageRail stage={stage} />
+
+      {biometricFellBack ? (
+        <div className="mb-4 border border-hairline border-l-2 border-l-ochre bg-[rgba(140,115,62,0.06)] px-3.5 py-2.5">
+          <p className="text-[11.5px] font-medium text-ochre">One-touch unlock is not available here</p>
+          <p className="mt-1 text-[11px] leading-relaxed text-slate-strong">
+            This browser cannot seal a key to your fingerprint, so your PIN remains the way in. Your
+            vault is unaffected — the PIN is what derives it either way.
+          </p>
+        </div>
+      ) : null}
 
       {stage === 0 ? (
         !verified ? (
