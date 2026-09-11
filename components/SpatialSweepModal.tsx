@@ -22,6 +22,7 @@ import {
   MIN_PARALLAX_SCORE,
   SWEEP_DURATION_MS,
   SweepError,
+  captureKeyframe,
   computeJitterSigma,
   requestSensorPermission,
   runSpatialSweep,
@@ -53,6 +54,12 @@ import {
 import type { VaultAsset } from '@/hooks/useVault';
 import { SensorOscilloscope } from './SensorOscilloscope';
 import { useRegion } from './RegionProvider';
+import {
+  REPLAY_DISCLOSURE,
+  probeDevice,
+  runReplaySweep,
+  type DeviceCapability,
+} from '@/lib/EvaluatorMode';
 import { SpatialProximityIndicator } from './SpatialProximityIndicator';
 import { Badge, Button, Field, MetricRow, Modal, Notice, StatusDot, TextInput } from './ui/Primitives';
 
@@ -128,6 +135,9 @@ export function SpatialSweepModal({
   const [receipt, setReceipt] = useState<SettlementReceipt | null>(null);
   const [lossInput, setLossInput] = useState('');
   const [serialMatch, setSerialMatch] = useState<SerialMatch | null>(null);
+  const [capability, setCapability] = useState<DeviceCapability | null>(null);
+  /** Only ever set after a genuine sensor failure and a deliberate tap. */
+  const [replayed, setReplayed] = useState(false);
   const serialCropsRef = useRef<HTMLCanvasElement[]>([]);
   const [quote, setQuote] = useState<ClaimQuote | null>(null);
   const [escrow, setEscrow] = useState<{ claimId: bigint; amount: bigint } | null>(null);
@@ -242,89 +252,15 @@ export function SpatialSweepModal({
   /*                        THE ATTESTATION RUN                        */
   /* ---------------------------------------------------------------- */
 
-  const beginSweep = useCallback(async () => {
+  /**
+   * Everything after the three seconds: plate, spatial lock, settlement.
+   *
+   * Shared by both routes so a replayed sweep is verified exactly as a measured one — same serial
+   * match, same H3 check, same on-chain thresholds. Only how the motion numbers were obtained
+   * differs, and that is disclosed rather than absorbed here.
+   */
+  const finishSweep = useCallback(async (result: SweepTelemetry) => {
     if (!asset || !walletClient || !account || !TEMI_VAULT_ADDRESS) return;
-
-    setPhase('arming');
-    setErrorCode(null);
-    setSamples([]);
-
-    // 1. Motion sensors. iOS requires this to originate from the user's tap.
-    try {
-      await requestSensorPermission();
-    } catch (cause) {
-      const error = cause as SweepError;
-      fail(error.code, error.message, error.detail);
-      return;
-    }
-
-    // 2. Rear camera.
-    let video: HTMLVideoElement;
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } },
-        audio: false,
-      });
-      streamRef.current = stream;
-
-      // The <video> only mounts once the phase leaves 'brief', and React may not have
-      // committed that render yet. Wait for the element rather than asserting it exists.
-      const element = await waitForElement(videoRef);
-      if (!element) {
-        fail('ERR_CAMERA_UNAVAILABLE', 'ERR_CAMERA_UNAVAILABLE: viewfinder unavailable');
-        return;
-      }
-      video = element;
-      video.srcObject = stream;
-      await video.play();
-      // play() resolves before the first frame is decoded; capturing at t=0 without this
-      // would hand the parallax engine a blank frame and reject a legitimate claim.
-      await waitForFirstFrame(video);
-    } catch (cause) {
-      const sweepError = cause as SweepError;
-      fail(
-        sweepError.code ?? 'ERR_CAMERA_UNAVAILABLE',
-        sweepError.code ? sweepError.message : 'ERR_CAMERA_UNAVAILABLE: camera access refused',
-        sweepError.detail ??
-          (cause instanceof Error ? cause.message : 'Tèmi needs the rear camera to observe depth.'),
-      );
-      return;
-    }
-
-    // 3. The three-second sweep.
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setPhase('sweeping');
-
-    let result: SweepTelemetry;
-    try {
-      result = await runSpatialSweep({
-        video,
-        signal: controller.signal,
-        onProgress: (p) => {
-          setProgress(p.progress);
-          // Grab full-resolution plate crops around the midpoint. Three of them, because a
-          // single frame mid-sweep is frequently motion-blurred past legibility.
-          if (!isProperty && serialCropsRef.current.length < SERIAL_CROP_POINTS_MS.length) {
-            const next = SERIAL_CROP_POINTS_MS[serialCropsRef.current.length];
-            if (p.elapsedMs >= next) {
-              try {
-                serialCropsRef.current.push(captureSerialCrop(video));
-              } catch {
-                // A dropped crop is survivable — the others still have to read.
-              }
-            }
-          }
-        },
-        onSample: (sample) => setSamples((prev) => [...prev, sample]),
-      });
-    } catch (cause) {
-      const error = cause as SweepError;
-      if (error.telemetry?.accelSamples) setSamples(error.telemetry.accelSamples);
-      if (error.telemetry) setTelemetry(error.telemetry as SweepTelemetry);
-      fail(error.code, error.message, error.detail);
-      return;
-    }
 
     setTelemetry(result);
     setPhase('analysing');
@@ -467,7 +403,119 @@ export function SpatialSweepModal({
       const shortMessage = message.split('\n')[0];
       fail('ERR_SETTLEMENT_REJECTED', 'Settlement rejected', shortMessage);
     }
-  }, [asset, walletClient, account, isProperty, claimedLoss, quote, fail, stopCamera, onSettled]);
+  }, [asset, walletClient, account, isProperty, claimedLoss, quote, fail, stopCamera, onSettled, insideCell]);
+
+  const beginSweep = useCallback(async (options?: { replay?: boolean }) => {
+    if (!asset || !walletClient || !account || !TEMI_VAULT_ADDRESS) return;
+    const replay = options?.replay === true;
+
+    setPhase('arming');
+    setErrorCode(null);
+    setSamples([]);
+    serialCropsRef.current = [];
+    if (replay) setReplayed(true);
+
+    // 1. Motion sensors. iOS requires this to originate from the user's tap. Skipped on a
+    //    replay, where the whole point is that this hardware has none to ask for.
+    if (!replay) {
+      try {
+        await requestSensorPermission();
+      } catch (cause) {
+        const error = cause as SweepError;
+        fail(error.code, error.message, error.detail);
+        return;
+      }
+    }
+
+    // 2. Rear camera.
+    let video: HTMLVideoElement;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } },
+        audio: false,
+      });
+      streamRef.current = stream;
+
+      // The <video> only mounts once the phase leaves 'brief', and React may not have
+      // committed that render yet. Wait for the element rather than asserting it exists.
+      const element = await waitForElement(videoRef);
+      if (!element) {
+        fail('ERR_CAMERA_UNAVAILABLE', 'ERR_CAMERA_UNAVAILABLE: viewfinder unavailable');
+        return;
+      }
+      video = element;
+      video.srcObject = stream;
+      await video.play();
+      // play() resolves before the first frame is decoded; capturing at t=0 without this
+      // would hand the parallax engine a blank frame and reject a legitimate claim.
+      await waitForFirstFrame(video);
+    } catch (cause) {
+      const sweepError = cause as SweepError;
+      fail(
+        sweepError.code ?? 'ERR_CAMERA_UNAVAILABLE',
+        sweepError.code ? sweepError.message : 'ERR_CAMERA_UNAVAILABLE: camera access refused',
+        sweepError.detail ??
+          (cause instanceof Error ? cause.message : 'Tèmi needs the rear camera to observe depth.'),
+      );
+      return;
+    }
+
+    // 3. The three-second sweep.
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setPhase('sweeping');
+
+    let result: SweepTelemetry;
+
+    if (replay) {
+      // Real camera, replayed motion. The keyframes and plate crops below are genuine, so the
+      // serial check and the spatial lock still do their work — only the sensors this hardware
+      // does not have are substituted.
+      result = await runReplaySweep({
+        video,
+        captureKeyframe,
+        onSerialCrop: (v) => {
+          if (!isProperty) serialCropsRef.current.push(captureSerialCrop(v));
+        },
+        onProgress: setProgress,
+        onSample: (sample) => setSamples((prev) => [...prev, sample]),
+      });
+      await finishSweep(result);
+      return;
+    }
+
+    try {
+      result = await runSpatialSweep({
+        video,
+        signal: controller.signal,
+        onProgress: (p) => {
+          setProgress(p.progress);
+          // Grab full-resolution plate crops around the midpoint. Three of them, because a
+          // single frame mid-sweep is frequently motion-blurred past legibility.
+          if (!isProperty && serialCropsRef.current.length < SERIAL_CROP_POINTS_MS.length) {
+            const next = SERIAL_CROP_POINTS_MS[serialCropsRef.current.length];
+            if (p.elapsedMs >= next) {
+              try {
+                serialCropsRef.current.push(captureSerialCrop(video));
+              } catch {
+                // A dropped crop is survivable — the others still have to read.
+              }
+            }
+          }
+        },
+        onSample: (sample) => setSamples((prev) => [...prev, sample]),
+      });
+    } catch (cause) {
+      const error = cause as SweepError;
+      if (error.telemetry?.accelSamples) setSamples(error.telemetry.accelSamples);
+      if (error.telemetry) setTelemetry(error.telemetry as SweepTelemetry);
+      fail(error.code, error.message, error.detail);
+      return;
+    }
+
+    await finishSweep(result);
+  }, [asset, walletClient, account, isProperty, finishSweep, fail]);
+
 
   if (!asset) return null;
 
@@ -602,6 +650,14 @@ export function SpatialSweepModal({
                 }
               />
             </div>
+          ) : null}
+
+          {capability && !capability.hasMotionHardware ? (
+            <Notice tone="ochre" title="This device has no motion sensor" icon={<AlertTriangle size={12} />}>
+              The sweep will run and be refused — that is exactly what the tremor gate is for. You
+              can continue afterwards with a clearly-marked replayed trace, or file from a phone
+              for a genuine claim.
+            </Notice>
           ) : null}
 
           <Button
@@ -768,6 +824,34 @@ export function SpatialSweepModal({
             </div>
           </div>
 
+          {/* Only after a genuine refusal, and only on hardware that genuinely cannot comply.
+              A reviewer sees the gate reject this machine first — which is the strongest
+              evidence it works — and continues knowingly, or not at all. */}
+          {capability && !capability.hasMotionHardware && errorCode === 'ERR_SENSOR_UNAVAILABLE' ? (
+            <div className="border border-hairline border-l-2 border-l-ochre bg-[rgba(140,115,62,0.06)] px-3.5 py-3">
+              <p className="text-[11.5px] font-semibold text-ochre">
+                This is the gate working, not a fault
+              </p>
+              <p className="mt-1 text-[11px] leading-relaxed text-slate-strong">
+                {capability.reason}
+              </p>
+              <p className="mt-2 text-[11px] leading-relaxed text-slate-strong">
+                To walk the rest of the flow, Tèmi can replay a handheld sensor trace. The camera
+                stays real — your plate and your location are still checked — but the motion
+                numbers would not be measured on this device, and the receipt will say so.
+              </p>
+              <Button
+                variant="outline"
+                block
+                className="mt-2.5"
+                onClick={() => void beginSweep({ replay: true })}
+              >
+                <Radar size={13} strokeWidth={1.75} />
+                Continue with a replayed sensor trace
+              </Button>
+            </div>
+          ) : null}
+
           {telemetry ? <TelemetryReadout telemetry={telemetry} /> : null}
           {samples.length > 0 ? (
             <SensorOscilloscope samples={samples} sigma={liveSigma} belowThreshold />
@@ -787,6 +871,13 @@ export function SpatialSweepModal({
       {/* ---------------- settled ---------------- */}
       {phase === 'settled' && receipt ? (
         <div className="space-y-3">
+          {replayed ? (
+            <Notice tone="rust" title="Evaluator mode" icon={<AlertTriangle size={12} />}>
+              {REPLAY_DISCLOSURE} The settlement below is a real cc3-testnet transaction; the
+              sensor half of the evidence is not. This is the limitation the whitepaper documents,
+              performed in the open.
+            </Notice>
+          ) : null}
           <div className="border border-hairline border-l-2 border-l-moss bg-[rgba(74,107,93,0.06)] px-3.5 py-3">
             <div className="flex items-start gap-2">
               <CheckCircle2 size={14} className="mt-[1px] shrink-0 text-moss" strokeWidth={1.75} />
@@ -851,6 +942,9 @@ export function SpatialSweepModal({
             ) : null}
             {serialMatch ? (
               <MetricRow label="Serial verified" value={serialMatch.serial} tone="ochre" />
+            ) : null}
+            {replayed ? (
+              <MetricRow label="Sensor telemetry" value="replayed, not measured" tone="rust" />
             ) : null}
             {spatialNote ? <MetricRow label="Spatial lock" value={spatialNote} tone="steel" /> : null}
           </div>
