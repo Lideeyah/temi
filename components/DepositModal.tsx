@@ -65,21 +65,37 @@ export function DepositModal({
 }: DepositModalProps) {
   const { region } = useRegion();
 
-  // A merchant funding a sized allocation wants their own rail, not a cross-chain proof. For a
-  // Global merchant that rail *is* the cross-chain one, which is why this reads from the region.
-  const [tab, setTab] = useState<TabId>(
-    prefillWei && prefillWei > 0n && region.rail !== 'attestcoin' ? 'trugi' : 'attestcoin',
-  );
+  // A trader in Lagos funds a vault in naira. Cross-chain readability is what makes a deposit
+  // made elsewhere legible here — a real capability, and the wrong first thing to show someone
+  // whose money is in a bank account down the road. So the merchant's own rail leads, and the
+  // Sepolia proof flow sits where a merchant who needs it will still find it.
+  //
+  // For a Global merchant there is no local rail: the cross-chain one *is* their rail, so it
+  // leads instead and the duplicate tab disappears rather than appearing twice under two names.
+  const hasLocalRail = region.rail !== 'attestcoin';
 
-  const TABS = [
-    { id: 'attestcoin', label: 'Attestcoin', hint: 'Ethereum Sepolia' },
-    { id: 'native', label: 'Native tCTC', hint: 'Creditcoin' },
-    {
-      id: 'trugi',
-      label: RAIL_TAB[region.rail]?.label ?? 'Local rail',
-      hint: RAIL_TAB[region.rail]?.hint ?? '',
-    },
-  ];
+  const [tab, setTab] = useState<TabId>(hasLocalRail ? 'trugi' : 'attestcoin');
+
+  // The modal outlives any single opening, and the region can change while it is closed. Land on
+  // the merchant's rail each time it opens rather than on whichever tab was left behind.
+  useEffect(() => {
+    if (open) setTab(hasLocalRail ? 'trugi' : 'attestcoin');
+  }, [open, hasLocalRail]);
+
+  const TABS = hasLocalRail
+    ? [
+        {
+          id: 'trugi',
+          label: RAIL_TAB[region.rail]?.label ?? 'Local rail',
+          hint: RAIL_TAB[region.rail]?.hint ?? '',
+        },
+        { id: 'native', label: 'Native tCTC', hint: 'Creditcoin' },
+        { id: 'attestcoin', label: 'Attestcoin', hint: 'Ethereum Sepolia' },
+      ]
+    : [
+        { id: 'attestcoin', label: 'Attestcoin', hint: 'Ethereum Sepolia' },
+        { id: 'native', label: 'Native tCTC', hint: 'Creditcoin' },
+      ];
 
   return (
     <Modal open={open} onClose={onClose} eyebrow="Fund reserve" title="Deposit" width="max-w-lg">
@@ -98,7 +114,7 @@ export function DepositModal({
           prefillWei={prefillWei}
         />
       ) : null}
-      {tab === 'trugi' ? (
+      {tab === 'trugi' && hasLocalRail ? (
         <TrugiTab
           walletClient={walletClient}
           account={account}
