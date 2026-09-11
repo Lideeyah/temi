@@ -128,15 +128,22 @@ export function MerchantProfileStage({
           </span>
           <input
             value={phone}
-            onChange={(event) => setPhone(event.target.value)}
+            // Same constraint as verification: digits only, capped at the plan length plus the
+            // optional trunk zero. A payout number that is one digit off is money misrouted.
+            onChange={(event) =>
+              setPhone(event.target.value.replace(/\D/g, '').slice(0, region.nationalDigits + 1))
+            }
             inputMode="numeric"
+            autoComplete="tel-national"
+            maxLength={region.nationalDigits + 1}
             placeholder={'0'.repeat(region.nationalDigits)}
             className="tabular focus-ring w-full bg-transparent px-3 py-2.5 text-[13px] text-ink placeholder:text-slate-soft"
           />
         </div>
         {phoneOk === false ? (
           <span className="mt-1.5 block text-[10.5px] text-rust">
-            {region.name} numbers are about {region.nationalDigits} digits after {region.dialingCode}.
+            {region.name} numbers are exactly {region.nationalDigits} digits after{' '}
+            {region.dialingCode}.
           </span>
         ) : phoneOk === true ? (
           <span className="tabular mt-1.5 block text-[10.5px] text-moss">

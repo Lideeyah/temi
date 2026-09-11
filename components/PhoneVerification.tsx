@@ -2,7 +2,13 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, Check, Loader2, MessageSquare, ShieldCheck } from 'lucide-react';
-import { REGION_LIST, isValidNationalNumber, toE164, type Region } from '@/lib/regions';
+import {
+  REGION_LIST,
+  isValidNationalNumber,
+  normaliseNationalNumber,
+  toE164,
+  type Region,
+} from '@/lib/regions';
 import { IdentityError, requestOtp, verifyOtp } from '@/lib/MerchantIdentity';
 import { cn } from '@/lib/utils';
 import { Notice } from './ui/Primitives';
@@ -41,6 +47,7 @@ export function PhoneVerification({
     return () => clearTimeout(timer);
   }, [cooldown]);
 
+  const digitsEntered = normaliseNationalNumber(phone).length;
   const phoneOk = phone.trim() === '' ? null : isValidNationalNumber(phone, region);
   const e164 = phoneOk ? toE164(phone, region) : '';
 
@@ -126,23 +133,32 @@ export function PhoneVerification({
             </span>
             <input
               value={phone}
-              onChange={(event) => setPhone(event.target.value)}
+              // Digits only, and never more than the plan allows. One extra character is permitted
+              // so a merchant who types the trunk zero out of habit is not cut off a digit short.
+              onChange={(event) =>
+                setPhone(event.target.value.replace(/\D/g, '').slice(0, region.nationalDigits + 1))
+              }
               inputMode="numeric"
+              autoComplete="tel-national"
+              maxLength={region.nationalDigits + 1}
               placeholder={'0'.repeat(region.nationalDigits)}
               autoFocus
               className="tabular focus-ring w-full bg-transparent px-3 py-2.5 text-[13px] text-ink placeholder:text-slate-soft"
             />
           </div>
-          {phoneOk === false ? (
-            <span className="mt-1.5 block text-[10.5px] text-rust">
-              {region.name} numbers are about {region.nationalDigits} digits after{' '}
-              {region.dialingCode}.
-            </span>
-          ) : phoneOk === true ? (
+          {phoneOk === true ? (
             <span className="tabular mt-1.5 block text-[10.5px] text-moss">{e164}</span>
+          ) : phoneOk === false ? (
+            // Say how far along they are rather than only that it is wrong, so the inactive
+            // button has a visible reason instead of looking broken.
+            <span className="tabular mt-1.5 block text-[10.5px] text-rust">
+              {digitsEntered} of {region.nationalDigits} digits · {region.name} numbers are exactly{' '}
+              {region.nationalDigits} after {region.dialingCode}
+            </span>
           ) : (
             <span className="mt-1.5 block text-[10.5px] text-slate-soft">
-              A leading zero is fine — it is stripped automatically.
+              {region.nationalDigits} digits after {region.dialingCode} — a leading zero is fine,
+              it is stripped automatically.
             </span>
           )}
         </label>

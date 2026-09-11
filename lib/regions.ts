@@ -158,10 +158,18 @@ export function toE164(national: string, region: Region): string {
   return `${region.dialingCode}${normaliseNationalNumber(national)}`;
 }
 
+/**
+ * Exactly the national length, with no slack.
+ *
+ * This once allowed a digit either side, on the reasoning that numbering plans vary. They do not
+ * vary here: NG, GH, KE and US national numbers are all fixed-length, and the slack was doing
+ * real harm. The number is half the vault key — a merchant who typed eleven digits by accident
+ * got a valid-looking +23490646781145, a vault derived from a number that does not exist, and no
+ * way back to it by typing their actual number. A refusal at the keyboard is the only place this
+ * is cheap to fix.
+ */
 export function isValidNationalNumber(national: string, region: Region): boolean {
-  const digits = normaliseNationalNumber(national);
-  // A digit either side of the nominal length, since numbering plans are not uniform.
-  return digits.length >= region.nationalDigits - 1 && digits.length <= region.nationalDigits + 1;
+  return normaliseNationalNumber(national).length === region.nationalDigits;
 }
 
 /** Masked for a receipt: never show a merchant's full number back to them in a shared view. */
