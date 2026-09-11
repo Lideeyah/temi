@@ -50,7 +50,7 @@ export function LiveRateLine({
         abi: temiVaultAbi,
         functionName: 'submitPriceProof',
         args: [proof],
-        account,
+        account: walletClient.account ?? account,
         chain: creditcoinTestnet,
       });
       await creditcoinPublicClient.waitForTransactionReceipt({ hash });

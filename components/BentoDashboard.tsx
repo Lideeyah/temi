@@ -131,7 +131,7 @@ export function BentoDashboard() {
           abi: temiVaultAbi,
           functionName: 'depositReserve',
           value: monthlyWei,
-          account: account.address,
+          account: account.walletClient.account ?? account.address,
           chain: creditcoinTestnet,
         });
         await creditcoinPublicClient.waitForTransactionReceipt({ hash });
@@ -151,7 +151,7 @@ export function BentoDashboard() {
       address: TEMI_VAULT_ADDRESS,
       abi: temiVaultAbi,
       functionName: 'compoundYield',
-      account: account.address,
+      account: account.walletClient.account ?? account.address,
       chain: creditcoinTestnet,
     });
     await creditcoinPublicClient.waitForTransactionReceipt({ hash });
@@ -831,7 +831,7 @@ function WithdrawModal({
         abi: temiVaultAbi,
         functionName: 'withdrawTier1',
         args: [wei],
-        account: account.address,
+        account: account.walletClient.account ?? account.address,
         chain: creditcoinTestnet,
       });
       await creditcoinPublicClient.waitForTransactionReceipt({ hash });

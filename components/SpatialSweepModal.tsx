@@ -320,7 +320,7 @@ export function SpatialSweepModal({
           liveH3Cell,
           claimAssetHash,
         ],
-        account,
+        account: walletClient.account ?? account,
         chain: creditcoinTestnet,
         value: quote?.bondRequired ?? 0n,
       });

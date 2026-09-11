@@ -268,7 +268,7 @@ function AttestcoinTab({
         abi: temiVaultAbi,
         functionName: 'verifyAndDeposit',
         args: [bundle, hash as Hex, attestedAmount],
-        account,
+        account: walletClient.account ?? account,
         chain: creditcoinTestnet,
       });
 
@@ -494,7 +494,7 @@ function NativeTab({
         abi: temiVaultAbi,
         functionName: 'depositReserve',
         value: wei,
-        account,
+        account: walletClient.account ?? account,
         chain: creditcoinTestnet,
       });
       await creditcoinPublicClient.waitForTransactionReceipt({ hash });
@@ -695,16 +695,15 @@ function TrugiTab({
       }
 
       /*
-       * Wait for this browser's own node to see the money.
+       * Wait for this browser's own node to see the money before spending it.
        *
-       * The relayer waits for its receipt before answering, so the transfer is final by the time
-       * we get here — final on the node the relayer used. Public RPC sits behind a load balancer,
-       * and the node answering the browser can be a block or two behind, which means the very
-       * next writeContract is priced against a balance that does not yet include the transfer and
-       * is refused for insufficient funds. It surfaces as "reverted with the following reason:"
-       * and then nothing, which reads like a contract rejection and is not one.
-       *
-       * So confirm against the same connection that will send the deposit, and only then send it.
+       * To be clear about what this is and is not: it did not fix the failure that prompted it.
+       * That was the deposit being sent as eth_sendTransaction to a node with no signer, and the
+       * fix for it is passing walletClient.account at the write. This wait is kept because the
+       * hazard it guards is real and separate — the relayer confirms against the node it used,
+       * public RPC sits behind a load balancer, and the node answering the browser can be a block
+       * behind, in which case the deposit is priced against a balance that does not yet include
+       * the transfer. Cheap insurance, correctly labelled.
        */
       setStep('Confirming settlement…');
       if (body.hash) {
@@ -718,7 +717,7 @@ function TrugiTab({
         abi: temiVaultAbi,
         functionName: 'depositReserve',
         value: RELAY_AMOUNT,
-        account,
+        account: walletClient.account ?? account,
         chain: creditcoinTestnet,
       });
       await creditcoinPublicClient.waitForTransactionReceipt({ hash });

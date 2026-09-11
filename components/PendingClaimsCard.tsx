@@ -57,7 +57,7 @@ export function PendingClaimsCard({
           abi: temiVaultAbi,
           functionName: 'finaliseClaim',
           args: [claimId],
-          account,
+          account: walletClient.account ?? account,
           chain: creditcoinTestnet,
         });
         await creditcoinPublicClient.waitForTransactionReceipt({ hash });

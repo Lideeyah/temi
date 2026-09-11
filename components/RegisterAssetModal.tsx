@@ -110,7 +110,7 @@ function useRegistration(onRegistered: () => void) {
           abi: temiVaultAbi,
           functionName: 'registerAsset',
           args: [assetId, category, declaredValue, h3CellIndex, targetReserve, BigInt(horizonMonths)],
-          account,
+          account: walletClient.account ?? account,
           chain: creditcoinTestnet,
         });
         const receipt = await creditcoinPublicClient.waitForTransactionReceipt({ hash: txHash });
