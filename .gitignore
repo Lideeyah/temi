@@ -16,3 +16,7 @@ public/tesseract
 .pending-deposit.json
 .sponsor.json
 .env*
+
+# Recording sandbox — local only, never shipped or committed.
+app/demo/
+components/demo/
