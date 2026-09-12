@@ -384,4 +384,6 @@ npm run dev
 
 ## 08. License
 
-MIT License. Designed and engineered for the Creditcoin CC3 Ecosystem.
+MIT License — see [`LICENSE`](LICENSE).
+
+Copyright © 2026 **Lydia Solomon**. Designed and engineered for the Creditcoin CC3 Ecosystem.

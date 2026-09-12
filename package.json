@@ -2,6 +2,14 @@
   "name": "temi",
   "version": "0.1.0",
   "private": true,
+  "description": "Non-custodial dual-reserve emergency micro-liquidity for emerging-market SMEs, on Creditcoin cc3-testnet.",
+  "author": "Lydia Solomon <lydiasolomon137@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Lideeyah/temi.git"
+  },
+  "homepage": "https://temi-vault.vercel.app",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
