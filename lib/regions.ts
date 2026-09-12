@@ -53,7 +53,9 @@ export const REGIONS: Record<RegionId, Region> = {
     ratePerTctc: 1_450,
     rail: 'trugi-nip',
     railName: 'Trugi NIP Instant Transfer',
-    payoutTarget: 'OPay · Moniepoint · GTBank',
+    // Money arrives at the merchant's own dedicated virtual account, so it leaves the same
+    // way. Naming a generic list of banks contradicted the rail the deposit modal shows.
+    payoutTarget: 'Providus virtual account',
     defaultAssetValue: 600_000,
     status: 'pilot',
   },

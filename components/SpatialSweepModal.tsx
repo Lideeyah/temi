@@ -1,6 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { cn } from '@/lib/utils';
+import { fiatToWei, parseFiat } from '@/lib/regions';
 import confetti from 'canvas-confetti';
 import {
   AlertTriangle,
@@ -13,7 +15,7 @@ import {
   ShieldCheck,
   Timer,
 } from 'lucide-react';
-import { decodeEventLog, type Address, type Hex, type WalletClient } from 'viem';
+import { formatUnits, decodeEventLog, type Address, type Hex, type WalletClient } from 'viem';
 import { creditcoinPublicClient, blockscoutTx, creditcoinTestnet } from '@/lib/chains';
 import { TEMI_VAULT_ADDRESS } from '@/lib/config';
 import { temiVaultAbi } from '@/lib/abi';
@@ -119,7 +121,7 @@ export function SpatialSweepModal({
   account,
   onSettled,
 }: SpatialSweepModalProps) {
-  const { region, fiat, money } = useRegion();
+  const { region, fiat, money, denomination } = useRegion();
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -150,12 +152,43 @@ export function SpatialSweepModal({
   const isProperty = asset?.category === 1;
 
   // The merchant states their own loss; it is only capped by what they declared at registration.
-  const claimedLoss = lossInput.trim() ? parseTctc(lossInput) : (asset?.declaredValue ?? 0n);
+  /*
+   * The loss is entered in whatever the merchant is reading.
+   *
+   * This asked for tCTC — a trader reporting a burnt generator was being made to convert their
+   * own loss into a token before they could file. Worse, it prefilled the declared value as a
+   * raw token figure, so the field opened on 2413.793103448275815026.
+   */
+  const claimedLoss = lossInput.trim()
+    ? denomination === 'fiat'
+      ? fiatToWei(parseFiat(lossInput), region)
+      : parseTctc(lossInput)
+    : (asset?.declaredValue ?? 0n);
   const lossExceedsDeclared = asset ? claimedLoss > asset.declaredValue : false;
   const lossValid = claimedLoss > 0n && !lossExceedsDeclared;
 
   // Ask the contract what this claim would actually do, so the merchant sees whether part of
   // it will be escrowed *before* they hold a camera up for three seconds.
+  /*
+   * Ask the device what it can actually do, before it is asked to prove anything.
+   *
+   * `capability` gated two things — the warning shown to a laptop before it sweeps, and the
+   * replayed-trace offer shown after it inevitably fails — and nothing ever set it. probeDevice
+   * was imported and never called, so both were dead code: a reviewer on a machine with no
+   * accelerometer met the refusal and had no route past it, which is the one path this modal
+   * exists to provide.
+   */
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void probeDevice().then((found) => {
+      if (!cancelled) setCapability(found);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
   useEffect(() => {
     if (!open || !asset || !account || !TEMI_VAULT_ADDRESS || claimedLoss <= 0n) {
       setQuote(null);
@@ -199,7 +232,14 @@ export function SpatialSweepModal({
   const assetKey = asset?.assetId ?? null;
   const declaredValue = asset?.declaredValue ?? 0n;
   useEffect(() => {
-    if (assetKey && open) setLossInput(formatTctcExact(declaredValue));
+    if (assetKey && open) {
+      // Prefill in the field's own unit, not in whatever the chain happens to store.
+      setLossInput(
+        denomination === 'fiat'
+          ? Math.round(Number(formatUnits(declaredValue, 18)) * region.ratePerTctc).toLocaleString('en-US')
+          : formatTctcExact(declaredValue),
+      );
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assetKey, open]);
 
@@ -560,20 +600,26 @@ export function SpatialSweepModal({
             hint="Capped at what you declared for this asset. The contract may still settle less, bounded by the mutual buffer."
             suffix={
               <span className="tabular text-[10px] text-slate-soft">
-                {fiat(claimedLoss)}
+                {denomination === 'fiat' ? `${formatTctc(claimedLoss, 4)} tCTC` : fiat(claimedLoss)}
               </span>
             }
           >
             <div className="relative">
+              {denomination === 'fiat' ? (
+                <span className="tabular pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[13px] text-slate-soft">
+                  {region.currencySymbol}
+                </span>
+              ) : null}
               <TextInput
                 value={lossInput}
                 onChange={(event) => setLossInput(event.target.value)}
-                inputMode="decimal"
-                placeholder="0.0"
-                className="pr-16"
+                aria-label={`Claimed loss in ${denomination === 'fiat' ? region.currencyCode : 'tCTC'}`}
+                inputMode={denomination === 'fiat' ? 'numeric' : 'decimal'}
+                placeholder={denomination === 'fiat' ? '0' : '0.0'}
+                className={cn('pr-16', denomination === 'fiat' && region.currencySymbol.length === 1 ? 'pl-7' : undefined)}
               />
               <span className="tabular pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-slate-soft">
-                tCTC
+                {denomination === 'fiat' ? region.currencyCode : 'tCTC'}
               </span>
             </div>
           </Field>
