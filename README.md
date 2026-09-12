@@ -1,435 +1,357 @@
-# Tèmi
+# Tèmi Protocol (`cc3-testnet`)
 
-**Tèmi** — *"Mine"* in Yorùbá — is a non-custodial, hardware-attested emergency micro-liquidity
-platform for emerging-market SMEs, settled on **Creditcoin cc3-testnet** (chain ID `102031`).
+> **Autonomous micro-liquidity clearinghouse & real-world asset underwriting engine built on Creditcoin CC3.**
 
-A Lagos trader whose generator burns out does not need an insurance policy. They need their own
-money back, today, without an adjuster. Tèmi replaces the sunk-cost premium with an
-**unencumbered dual reserve**: 85% stays in a personal vault the operator can withdraw at any
-moment, and 15% joins a mutual buffer that covers losses larger than any one operator saved for.
-
-Claims are not adjudicated by a human. They are settled against physical evidence that the
-operator's own phone produces and their own browser verifies.
+**Live Demo:** [https://temi-vault.vercel.app/](https://temi-vault.vercel.app/)
+**Execution Layer:** Creditcoin CC3 Testnet (`Chain ID: 102031`)
+**Core Precompile:** Attestcoin Native Query Verifier (`0x0FD2`)
+**License:** MIT
 
 ---
 
-## Attestcoin Protocol integration
+## 01. System Thesis
 
-Tèmi is an **Attestcoin Smart Contract (ASC)** operating strictly within the hackathon's
-**readability** scope. Creditcoin attestors watch Ethereum Sepolia and reach quorum; `TemiVault`
-then *reads* that attested state by verifying an inclusion proof through the on-chain Block
-Prover. Nothing is ever written back to Sepolia, and reads consume no ATC.
+Informal MSMEs across emerging markets power over 80% of regional employment and trade, yet they remain structurally uninsurable and credit-invisible. When a commercial generator fails, a milling machine breaks, or a market fire occurs, years of working capital vanish overnight.
 
-```
-Ethereum Sepolia                 Creditcoin cc3-testnet
-────────────────                 ──────────────────────
-TemiSourcePortal                 attestors reach quorum
-  .fundReserveFor(operator)   →  post attestation
-  emits ReserveFunded                     │
-                                          ▼
-                                 TemiVault.verifyAndDeposit(proof, sepTxHash, amount)
-                                   ├─ 0x0FD2 verifyAndEmit()  ← Merkle + continuity proof
-                                   ├─ EvmTxDecoder reads the proven receipt logs
-                                   ├─ requires ReserveFunded from the trusted portal
-                                   └─ credits 85% Tier 1 / 15% Tier 2
-```
+Traditional commercial insurance fails these enterprises:
+1. **Drains Liquidity:** Converts critical cash reserves into dead, sunk corporate premiums.
+2. **Weaponizes Latency:** Imposes predatory 8–12 week manual loss adjustments that shutter active stalls.
+3. **Ignores Productive Assets:** Relies on nonexistent paper credit records rather than verified physical capital.
 
-| Component | Value |
-| --- | --- |
-| Block Prover precompile | `0x0000000000000000000000000000000000000FD2` |
-| Source chain | Ethereum Sepolia, **chain key `1`** |
-| Proof builder | `https://prover.cc3-testnet.creditcoin.network` |
-| Attestation lag | ~35–45 Sepolia blocks (~8 min) |
+**Tèmi inverts this paradigm.**
 
-> cc3-testnet's attestor set covers chain keys `1` (Ethereum Sepolia) and `3` (Ethereum Mainnet)
-> only — confirmed against the live prover, which rejects every other key. Base Sepolia is not
-> provable here, so Tèmi's source portal targets Ethereum Sepolia.
+Instead of extracting non-refundable premiums, Tèmi deploys an autonomous **85/15 dual-reserve vault**. 85% of capital remains unencumbered on the merchant's balance sheet, while an automated 15% mutual pool resolves verified catastrophic overages in seconds.
 
-### Live valuation through the same precompile
-
-Attestcoin is not just the onboarding rail. A cross-chain deposit arrives denominated in the
-source chain's asset, so the vault prices it by *reading Chainlink off Ethereum* — proving a
-`transmit` transaction's inclusion via `0x0FD2` and taking the price out of the resulting
-`AnswerUpdated` log.
-
-`current` and `roundId` are both indexed, so the price sits in `topics[1]`, not the data payload:
+Crucially, Tèmi is designed as **Creditcoin's real-world underwriting rail**. By capturing daily fiat reserve velocity, client-side OCR hardware anchors, and spatial-telemetry claims, Tèmi transforms informal businesses into verified onchain borrowers — unlocking under-collateralized lending without paper credit bureaus.
 
 ```
-answerWad = uint256(topics[1]) * 1e10     // Chainlink 8dp -> vault 18dp
-require roundId > lastRoundId             // blocks replaying a favourable historical round
-require now <= updatedAt + 6 hours        // backstop against a dead feed
++-----------------------------------------------------------------------+
+|                        MERCHANT BALANCE SHEET                         |
+|                                                                       |
+|  +------------------------------------+  +-----------------------+    |
+|  | 85% Tier 1 Personal Reserve        |  | 15% Mutual Buffer     |    |
+|  | • 100% liquid, withdrawable at 0%  |  | • Pooled communal pool|    |
+|  | • Non-custodial merchant asset     |  | • Catastrophic payout |    |
+|  | • First line of emergency defense  |  | • 1.5% fee, this tier |    |
+|  +------------------------------------+  +-----------------------+    |
++-----------------------------------------------------------------------+
+              |
+              +-------------------------+-------------------------+
+              |                                                   |
+              v                                                   v
+   [Hardware Claim Settlement]                      [Proof of Business Health]
+   • OCR serial hash bound                          • Reserve velocity audit
+   • Tremor variance (σ ≥ 0.01)                     • Spatial stability record
+   • 3D parallax depth (≥ 850/1000)                 • Creditcoin micro-lending
+   • H3 cell check (res 10)                         • Collateral-free underwriting
 ```
-
-Refreshing is permissionless — anyone can push a newer round, nobody can push an older one — and
-if the observation goes stale the vault refuses to price a deposit rather than guessing. The one
-trusted input left is tCTC/USD, a governance parameter until an attested CTC feed exists, and the
-UI labels it separately from the proven leg.
-
-### Why the beneficiary cannot be spoofed
-
-`verifyAndDeposit` credits the operator named **inside the attested log**, never the caller. Any
-relayer can therefore submit somebody else's proof without being able to redirect the funds.
-Replay is blocked twice: once on the Sepolia transaction hash, and once on `keccak256(txBytes)`
-— a commitment to the exact bytes the precompile verified, so relabelling the hash achieves
-nothing.
-
-### Decoding the attested payload
-
-The proof builder attests to `abi.encode(uint8 txType, bytes[] chunks)` — the source transaction
-*and its receipt*. Chunk layout varies across EIP-2718 types 0–4, but two positions are
-invariant: `chunks[0]` is always the common transaction fields and `chunks[last]` is always the
-receipt. `EvmTxDecoder` reads only those two, which makes it type-agnostic — a legacy
-transaction and an EIP-7702 transaction take the identical code path.
 
 ---
 
-## Hardware attestation
+## 02. Protocol Deployments & Parameters
 
-Two physical facts are measured on-device for every claim. Neither is checkable from a photo,
-and no video, image or sensor trace ever leaves the phone.
+| Component | Network / Environment | Identifier / Address |
+| :--- | :--- | :--- |
+| **Execution Layer** | Creditcoin CC3 Testnet | Chain ID `102031` |
+| **RPC Endpoint** | CC3 Testnet EVM | `https://rpc.cc3-testnet.creditcoin.network` |
+| **`TemiVault`** | CC3 Testnet | [`0x17766312c7300d01aed58174bc6ff39944272a2c`](https://creditcoin-testnet.blockscout.com/address/0x17766312c7300d01aed58174bc6ff39944272a2c) |
+| **`TemiSourcePortal`** | Ethereum Sepolia | [`0x81b78bc835267408d851fae39a15e123ea66819c`](https://sepolia.etherscan.io/address/0x81b78bc835267408d851fae39a15e123ea66819c) |
+| **State Prover** | Attestcoin precompile | `0x0000000000000000000000000000000000000FD2` |
+| **Proof Builder** | Attestcoin attestor API | `https://prover.cc3-testnet.creditcoin.network` |
+| **Attested Source Chains** | Attestcoin chain keys | `1` = Ethereum Sepolia · `3` = Ethereum Mainnet |
+| **Price Oracle** | Chainlink ETH/USD on Sepolia | `0x694AA1769357215DE4FAC081bf1f309aDC325306` |
+| **Fiat Custody Rail** | Providus Bank / Trugi NIP | NGN dedicated virtual account ingress |
 
-**Gate 1 — tremor.** A phone held in a hand is never still. Tèmi takes the population standard
-deviation of `|a| = √(x²+y²+z²)` across the three-second sweep. Below `σ = 0.01` the device is
-resting on something, and the claim is refused before the camera is even consulted.
+### On-chain economic constants
 
-**Gate 2 — motion parallax.** When you pan across a real 3-D scene, near objects sweep the frame
-faster than far ones. When you pan across a *flat* surface — a photograph, a laptop showing
-damage — the whole image translates by one uniform amount, because a plane's image motion under
-camera rotation is a single homography with no depth term.
+Every figure below is a `public constant` on the deployed `TemiVault` and can be read directly from the contract.
 
-So Tèmi measures per-quadrant horizontal displacement by normalised cross-correlation of column-
-luminance profiles, refined to sub-pixel by parabolic interpolation, and looks at the **spread**
-of the four displacements. Real scene: the quadrants disagree. Flat screen: they agree almost
-exactly. That spread is then cross-checked against integrated gyroscope rotation, so a video
-replayed on a monitor cannot supply the image half on its own.
-
-Measured on synthetic scenes with known ground truth (`npm test`), against the contract's 850 gate:
-
-| Scene | Quadrant spread | Score | Verdict |
-| --- | --- | --- | --- |
-| Real 3-D, handheld pan | 2.05 px | **901** | accepted |
-| Flat screen / photograph | 0.003 px | **455** | `ERR_PARALLAX_REJECTED` |
-| Video replayed on a screen | 0.005 px | **260** | `ERR_PARALLAX_REJECTED` |
-| Static camera | — | **9** | `ERR_PARALLAX_REJECTED` |
-
-**Serial plate.** Movable machinery carries a third gate: the sweep must read the machine's
-serial plate, and `settleClaim` requires `keccak256(serial) == assetId`. Parallax proves the
-claimant is in front of something real; only the plate proves it is theirs. OCR runs on-device
-against a full-resolution crop of the viewfinder's inner box, and because we only need *some*
-token in the output to hash to the registered id, plate noise is free — with a nearest-first
-expansion over O/0, I/1, S/5 shape confusions to absorb misreads without ever loosening the
-equality check.
-
-**Spatial lock.** Commercial property carries a third gate: live GPS must resolve to the same
-Uber H3 resolution-10 hexagon the shop was registered in, with a fix no worse than ±100 m.
-
-A res-10 cell is ~12,300 m², about 150 m across — not the 66 m² an earlier draft claimed, which
-mistook the average *edge length in metres* for an area. The coarseness is still correct: consumer
-GPS drifts by tens of metres, and a cell tight enough to isolate one stall (res 12, ~22 m across)
-would be smaller than the error bar. The lock proves presence *at the premises*; the DisCo meter
-number bound into the asset id is what identifies the unit.
-
-Because the match is exact, a merchant near a cell edge can drift out and be refused. Rather than
-widening the accepted area — which would multiply the impersonation surface by seven — the
-boundary is made visible: a live watch reports whether you are inside, how many metres past the
-*edge* you are, and which way to walk, and the sweep is held until you are back in. Only the hexagon is written on-chain — the raw coordinate never leaves the device, which
-is enough to prove someone is standing at their own stall and not enough to track them.
+| Constant | Value | Meaning |
+| :--- | :--- | :--- |
+| `TIER1_SPLIT_BPS` | `8500` | 85% of every deposit stays the merchant's |
+| `PROTOCOL_SETTLEMENT_FEE_BPS` | `150` | 1.5%, charged **on the mutual draw only** |
+| `TIER2_DRAW_CAP_BPS` | `1000` | a single claim may draw at most 10% of the pool |
+| `INSTANT_TIER2_CAP_BPS` | `100` | mutual draws ≤ 1% of the pool settle in the same block |
+| `CLAIM_BOND_BPS` | `1000` | 10% bond on escrowed claims, withheld from payout if unfunded |
+| `LIFETIME_DEPOSIT_MULTIPLE` | `3` | cumulative mutual draws capped at 3× lifetime deposits |
+| `CHALLENGE_WINDOW` | `24 hours` | escrow period for claims above the instant cap |
+| `MIN_JITTER_VARIANCE` | `100` | σ ≥ 0.01, scaled by 10,000 |
+| `MIN_PARALLAX_SCORE` | `850` | out of 1000 |
+| `MAX_ORACLE_STALENESS` | `6 hours` | a price round older than this is refused |
 
 ---
 
-## Opening an account
+## 03. Cryptographic & Operational Architecture
 
-A merchant verifies their phone number, then chooses a 4-digit PIN. Those two things *are* the
-vault — the account is derived, not generated, so the same number and PIN reproduce the same
-address on any handset. Nothing to write down, nothing to lose, and no fingerprint sensor
-required, which matters on the phones this product is actually for.
+### 3.1 Zero-Friction Deterministic Key Derivation
 
-### Why the PIN is not salted with the phone number alone
-
-The obvious derivation is `PBKDF2(PIN, salt = phone)`. It does not survive contact with an
-attacker. A salt is public by design and a trader's number is on their shop sign, so the whole key
-rests on four digits:
+To onboard non-crypto-native merchants without seed phrases or gas friction, accounts are derived client-side via high-iteration PBKDF2:
 
 ```
-Exhausting the ENTIRE 4-digit PIN space against a known phone number
-  candidates tried : 10,000
-  wall clock       : 77.1 seconds   (single core, unoptimised)
+privateKey = PBKDF2-SHA256(
+    password = PIN,
+    salt     = serverKeyShare ‖ phoneE164 ‖ "temi:cc3:vault",
+    rounds   = 600,000,
+    length   = 256 bits
+)
 ```
 
-Derive all 10,000 candidate addresses, find the funded one, drain it. So a second input is
-required — a high-entropy share held server-side and released only after the number is verified:
+**The server key share is load-bearing, not incidental.** A salt is not a secret and a trader's phone number is printed on their shop sign — deriving from the PIN and phone alone leaves the entire key resting on four digits. Exhausting all 10,000 candidates was measured at **77.1 seconds on a single core**. The salt therefore includes a 512-bit share held server-side and released only after the merchant proves control of the number by OTP:
 
 ```
-privateKey = PBKDF2-SHA256(PIN, salt = serverShare ‖ phone ‖ "temi:cc3:vault", 600_000)
+serverKeyShare = HMAC-SHA512(pepper, "share:" ‖ phoneE164)
 ```
 
-Neither half suffices. The server never receives the PIN and cannot derive a merchant's key even
-from its own database; an attacker holding the phone number has nothing to grind against.
+Neither half is sufficient. The service never sees the PIN, so it cannot derive a merchant's key even from its own database. An attacker holding the phone number has nothing to grind against.
 
-**What this does not fix:** someone with the unlocked handset can still try 10,000 PINs against
-the local ciphertext — about 15 minutes. No KDF makes four digits strong. So the defence is the one
-a SIM card uses: after 10 wrong PINs the local share is destroyed and the vault can only be reached
-by re-verifying the number over SMS. Nothing is lost, because the key is derived rather than
-stored.
+* **Deterministic Recovery:** the same number and PIN reconstruct the identical non-custodial vault on any handset. Verified across Node and browser to the same address.
+* **Chain-Verified Sign-In:** signing in derives the key, looks the address up on cc3-testnet, and only writes to the device once a vault is found there — so a mistyped PIN reports *"no vault for this number with that PIN"* instead of silently creating an empty one.
+* **Automated Gas Grant:** a `0.05 tCTC` sponsorship is dispatched to the derived address on vault creation, so the merchant transacts without ever buying a token.
+* **Local Attempt Limit:** 10 wrong PINs wipe the device's stored share. The vault is unaffected; the number and PIN restore it elsewhere.
 
-In production the pepper belongs in an HSM, the codes go over real SMS, and rate limiting must
-survive a restart. `lib/otpStore.ts` is explicit about being the demo-grade version of all three.
+### 3.2 State Verification via the Attestcoin Precompile (`0x0FD2`)
 
+Tèmi reads cross-chain state through Creditcoin's Native Query Verifier precompile. Capital deposited on Ethereum Sepolia is *read* into Creditcoin — attestors watch the source chain, reach quorum, and post an attestation; the vault then verifies the transaction's inclusion and credits the operator named inside the attested log. **Nothing is written back to Sepolia**, which is the readability-only scope this integration targets.
 
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.28;
 
-Biometric unlock is offered as an opt-in convenience on devices that have it, never as a
-requirement. A second, deliberately quiet path connects an injected EVM wallet so a reviewer can
-drive the same contracts from a funded account. All paths produce a viem wallet client and an
-address, so everything downstream is one code path.
+import {INativeQueryVerifier} from "./INativeQueryVerifier.sol";
 
-Not account abstraction: no smart account, no session keys, and sponsorship is a rate-limited drip
-rather than a paymaster.
+contract TemiVault {
+    INativeQueryVerifier public constant ATTESTCOIN_VERIFIER =
+        INativeQueryVerifier(0x0000000000000000000000000000000000000FD2);
 
-## Protocol revenue
+    uint32 public constant CHAIN_KEY_ETHEREUM_SEPOLIA = 1;
 
-No premium, so the protocol earns only on delivery:
+    error ProofRejected();
 
-| Stream | Rate | Charged on |
-| --- | --- | --- |
-| Mutual settlement fee | 1.5% | the **Tier 2 draw only** — never Tier 1 |
-| Yield spread | 15% | yield only, never principal |
-| Deposits / withdrawals / rejected claims | — | nothing |
+    /// Verifies a source-chain transaction's inclusion, then credits the operator
+    /// named inside the attested ReserveFunded log.
+    function verifyAndDeposit(bytes calldata bundle) external {
+        (
+            uint32 chainKey,
+            uint64 height,
+            bytes memory txBytes,
+            INativeQueryVerifier.MerkleProof memory merkleProof,
+            INativeQueryVerifier.ContinuityProof memory continuityProof
+        ) = _decodeBundle(bundle);
 
-The fee deliberately spares the Tier 1 draw. Charging it would contradict the guarantee the
-product rests on — that your own reserve is unencumbered — and it would be arbitrageable, since
-`withdrawTier1()` is free: anyone whose loss was covered by their own balance would withdraw
-instead of claiming, bypassing the attestation pipeline for exactly the small repairs it should be
-capturing.
-
-```
-Claimed loss                          ₦120,000
-Tier 1 draw · own funds                ₦50,000   0% fee
-Tier 2 draw · mutual buffer            ₦70,000
-Mutual settlement fee · 1.5% of Tier 2  −₦1,050
-Net dispatched                        ₦118,950
+        // Reverts inside the precompile on a forged root or a broken continuity chain.
+        ATTESTCOIN_VERIFIER.verifyAndEmit(chainKey, height, txBytes, merkleProof, continuityProof);
+        // ... decode the receipt, credit the beneficiary, split 85/15
+    }
+}
 ```
 
-**Nothing is generating yield today.** `yieldStrategy` is `address(0)` and the UI says so.
-Creditcoin exposes no staking precompile to the EVM, so a contract cannot nominate validators;
-PenguinSwap is live on testnet but we could not verify a router or USD1 address on cc3-testnet.
-The 85/15 accounting is built and tested behind a payable, permissionless `distributeYield()` —
-the split is the part that has to be right, and it is the same wherever the yield comes from.
+The same precompile proves the **Chainlink ETH/USD round** used for valuation: the round's `AnswerUpdated` log is proven from Sepolia, the answer recovered from `topics[1]`, scaled from 8 to 18 decimals, and refused if older than six hours.
 
-## Optimistic settlement
+> Verified live, not mocked. The test suite locates a real attested Sepolia transaction, fetches its proof from the attestor API, confirms `0x0FD2` accepts it, and confirms **`0x0FD2` reverts on a forged merkle root**.
 
-A browser cannot prove where a sensor reading came from, so large draws on *other people's*
-money are not taken on trust. The window is keyed to the Tier 2 draw, not the claim size — a
-merchant taking their own Tier 1 back is never delayed:
+### 3.3 Three-Gate Edge Sensor Fraud Defense
 
-| Tier 2 draw | What happens |
-| --- | --- |
-| ≤ 1% of the buffer | settles in the same block |
-| above that | Tier 1 paid immediately; the buffer's share escrowed 24h with a 10% bond |
+Claims bypass subjective human loss adjusters through deterministic hardware telemetry, validated on-chain before any payout executes.
 
-Anyone may challenge by matching the bond. Challenge upheld: escrow returns to the buffer, the
-claimant forfeits the bond, half goes to whoever caught it, and the asset returns to cover so an
-honest re-claim is still possible. Challenge rejected: the challenger's stake goes to the merchant
-they delayed — without that, the window would be a free denial-of-service against honest users.
+* **OCR Hardware Anchor.** Stamped manufacturer serial plates are read on-device via Tesseract WASM inside a fixed reticle, and the asset is bound to the hash of the string the camera actually read:
 
-## Solvency invariant
+  ```
+  movable machinery   assetId = keccak256(serialNumber)
+  commercial property assetId = keccak256(h3Index ‖ prepaidMeterNumber)
+  ```
 
-```
-tier1Draw = min(claimedLoss, tier1PersonalBalance)          // your own money drains first
-tier2Draw = min(remainingLoss, 10% × tier2Pool, 3 × lifetimeDeposits, tier2Pool)
-payout    = tier1Draw + tier2Draw
-```
+  Registration **requires a capture** — the serial field is disabled until the plate has been photographed and read. A serial typed from memory would hash to something no future claim could ever match, and the merchant would be locked out of their own asset with nothing on screen to explain it.
 
-The mutual buffer is bounded twice — once for pool solvency, once against an operator draining
-more than they ever contributed.
+* **Micro-Tremor Telemetry.** Asserts natural hand micro-oscillation (`σ ≥ 0.01`) from the device accelerometer at 60 Hz, defeating a static mount. Measured: a resting device reads `0.00141`; a genuine handheld sweep reads `0.276`.
+
+* **3D Parallax Vector Field.** Per-quadrant column-luminance cross-correlation with sub-pixel parabolic refinement. The *spread* of disparity across quadrants separates a real 3D scene from a flat plane. Measured: real scene `901`, flat screen `455`, replayed video `260`, static camera `9`. Threshold `850`.
+
+* **Spatial Cell Enforcement.** Uber H3 **resolution 10** — roughly 12,291 m², about **150 m across** — with a hard `±100 m` GPS accuracy ceiling, because a weaker fix cannot reliably place a claimant inside their own cell. Only the cell index reaches the chain; raw coordinates never leave the device.
+
+**Evaluator mode.** Hardware without an accelerometer *fails these gates by construction*, and that refusal is the strongest evidence the gates work. After a genuine failure — and only then — the interface offers to replay a handheld sensor trace so a reviewer can walk the rest of the flow. The camera stays real; the receipt states `Sensor telemetry: replayed, not measured`.
 
 ---
 
-## Running it
+## 04. Sustainable Commercial Engine & Unit Economics
+
+```
+[Incoming Fiat / NGN]
+         |
+         v
++------------------+     0.40% gateway margin            [DESIGNED]
+| Trugi Fiat Rail  | ------------------------------------> [Tèmi Treasury]
++------------------+
+         |
+         v
++------------------+     0.00% draw fee (100% unencumbered)   [LIVE]
+| 85% Tier 1 Vault | ------------------------------------> [Merchant Liquid Cash]
++------------------+
+         |
+         +-------------> [Creditcoin Underwriting Registry]  [DESIGNED]
+                                   |
+                                   | 0.75% B2B referral bounty
+                                   v
+                         [Institutional Lenders]
+                                   |
+                                   v
++------------------+     1.50% settlement fee (mutual draw)   [LIVE]
+| 15% Mutual Pool  | ------------------------------------> [Protocol Clearing Margin]
++------------------+
+```
+
+### Live on-chain today
+
+* **Personal Tier 1 Reserve (85%)** — `0.00%` withdrawal fee, no lock-up, no notice period, no forfeiture. Enforced by `withdrawTier1`.
+* **Mutual Buffer Settlement (15%)** — `1.50%` performance fee applied **strictly** to the portion of a claim that draws from the communal pool. A loss covered entirely by the merchant's own Tier 1 costs them nothing. This is the two-line invariant that separates a reserve from a premium, and it is enforced in `_disburseClaim`.
+* **Protocol Yield Share** — `YIELD_PROTOCOL_SHARE_BPS = 1500`. The engine exists and distributes by O(1) cumulative index, **but `yieldStrategy` is `address(0)` on this deployment**: Creditcoin cc3-testnet exposes no staking precompile to the EVM, so no yield is claimed, quoted, or earned. The interface says "none connected" rather than advertising an APY nobody received.
+
+### Designed, not yet implemented
+
+The two revenue lines below are part of the economic architecture and are **not** in the deployed contract. They are stated here as roadmap, not as live behaviour.
+
+* **Fiat Rail Gateway Spread** — `0.40%` margin on virtual-account deposit and payout routing via Trugi NGN rails.
+* **B2B Underwriting Bounty** — `0.75%` origination referral paid by micro-lenders on Creditcoin when consuming Tèmi's verified business-health telemetry.
+
+### Pan-African Distribution Horizon
+
+The app ships four jurisdictions today. Nigeria is piloted; the others are wired and labelled *configured but not yet piloted* in the interface itself.
+
+* **Phase 1 · Nigeria (live).** Distribution through organized trade associations and market cooperative unions. NGN settlement via Trugi NIP and Providus Bank dedicated virtual accounts. Rate ₦1,450/tCTC.
+* **Phase 2 · Ghana (configured).** Merchant trade associations (GUTA) over MTN MoMo and Zeepay. GH₵ rails present in `lib/regions.ts`.
+* **Phase 3 · Kenya (configured).** Cooperative onboarding via Chamas over M-PESA B2C/C2B through the Daraja API. KSh rails present.
+* **Global (configured).** Attestcoin cross-chain direct, for merchants outside the fiat rails.
+* **Cross-Border Hedging.** Regional pool volatility rebalanced through PenguinSwap USD1 liquidity pairs. *No verifiable cc3-testnet router exists yet; this leg is designed and named in the interface, not executed on-chain.*
+
+---
+
+## 05. Codebase Layout
+
+```
+.
+├── contracts/
+│   ├── TemiVault.sol              # 85/15 dual-reserve accounting, claims, challenge window,
+│   │                              #   revenue, and the 0x0FD2 cross-chain read path
+│   ├── TemiSourcePortal.sol       # Ethereum Sepolia ingress — emits ReserveFunded(operator)
+│   ├── INativeQueryVerifier.sol   # Attestcoin precompile interface (0x0FD2)
+│   └── EvmTxDecoder.sol           # EIP-2718 tx/receipt decoding for attested payloads
+├── app/
+│   ├── page.tsx                   # Landing page
+│   ├── app/page.tsx               # Merchant vault
+│   ├── whitepaper/page.tsx        # Protocol whitepaper
+│   └── api/
+│       ├── otp/{request,verify}/  # Phone verification + server key-share release
+│       ├── relayer/               # Simulated inbound fiat settlement
+│       └── sponsor/               # 0.05 tCTC gas grant
+├── components/
+│   ├── ui/Primitives.tsx          # The entire design system — no control is defined elsewhere
+│   ├── landing/                   # Landing sections
+│   ├── whitepaper/                # Whitepaper sections
+│   ├── BentoDashboard.tsx         # Merchant dashboard shell
+│   ├── VaultSetup.tsx             # Sign in / create, reserve sizing, funding
+│   ├── DepositModal.tsx           # Trugi NGN · Native tCTC · Attestcoin rails
+│   ├── RegisterAssetModal.tsx     # Track A serial plate · Track B H3 + meter
+│   ├── SpatialSweepModal.tsx      # Three-second sweep, gates, settlement receipt
+│   └── PendingClaimsCard.tsx      # Challenge-window finalisation
+├── lib/
+│   ├── MerchantIdentity.ts        # PBKDF2 600k derivation, PIN check, biometric PRF sealing
+│   ├── otpStore.ts                # Derived OTP codes + HMAC-SHA512 server key share
+│   ├── SpatialSweepEngine.ts      # Tremor variance + parallax scoring
+│   ├── SerialPlateReader.ts       # Reticle crop, binarisation, Tesseract, confusion-set match
+│   ├── H3SpatialLock.ts           # Resolution-10 cell resolution and proximity
+│   ├── AttestcoinConduit.ts       # Proof fetch, attested height, bundle encoding
+│   ├── ChainlinkOracle.ts         # Proven ETH/USD round, 8→18 decimal scaling
+│   ├── regions.ts                 # NG · GH · KE · GLOBAL rails, currency, phone plans
+│   └── abi/                       # Generated ABIs
+├── hooks/
+│   ├── useMerchantAccount.ts      # Phone+PIN and injected-wallet paths behind one interface
+│   └── useVault.ts                # On-chain reads, claims, telemetry, oracle
+├── tests/                         # 15 suites, 280 assertions, Node + ethereumjs EVM (Cancun)
+│   ├── vault.test.mjs             # Solvency invariants against real deployed bytecode
+│   ├── challenge.test.mjs         # Escrow, bond, challenge, finalisation
+│   ├── revenue.test.mjs           # Fee charged on the Tier 2 draw only
+│   ├── attestcoin.test.mjs        # Live Sepolia proof → 0x0FD2 accept + forged-root reject
+│   ├── oracle.test.mjs            # Live provable Chainlink round
+│   ├── identity.test.mjs          # PBKDF2 recovery, collision, server-share dependence
+│   ├── signin.test.mjs            # Right PIN opens the vault; wrong PIN finds nothing
+│   ├── parallax.test.mjs          # 3D vs flat vs replay vs static discrimination
+│   ├── serial.test.mjs            # OCR confusion sets, bounded search
+│   ├── proximity.test.mjs         # H3 cell geometry and boundary distance
+│   ├── signer.test.mjs            # Every writeContract signs locally, not via the node
+│   ├── phone.test.mjs             # Exact national length in all four jurisdictions
+│   ├── otp.test.mjs               # Verification across two separate processes
+│   ├── deploy-preflight.test.mjs  # Constructor, write-once, recoverable float
+│   └── evm-harness.mjs            # Cancun EVM harness over deployed bytecode
+└── scripts/
+    ├── compile.mjs · gen-abi.mjs  # solc 0.8.28 → ABIs
+    ├── deploy.mjs · deploy-portal.mjs
+    ├── check-drift.mjs            # Deployed selectors vs source ABI
+    └── live-attestcoin.mjs        # End-to-end Sepolia → CC3 proof run
+```
+
+> **Toolchain note:** this repository does **not** use Foundry. Contracts compile with `solc 0.8.28` via `scripts/compile.mjs`, and the invariant suite executes **real deployed bytecode** on an `ethereumjs` EVM pinned to the **Cancun** hardfork — chosen because solc 0.8.28 emits `MCOPY`, and an earlier hardfork silently turns genuine reverts into `invalid opcode`, which made several assertions pass for the wrong reason.
+
+---
+
+## 06. Live Demo & Evaluator Quickstart
+
+Judges and evaluators do not need to configure environment variables, clone the repository, or pre-fund a wallet.
+
+**Live application:** [https://temi-vault.vercel.app/](https://temi-vault.vercel.app/)
+
+### Zero-friction walkthrough
+
+1. **Launch.** Visit [temi-vault.vercel.app](https://temi-vault.vercel.app/) and open **Access Merchant Vault**. Choose **"No, this is my first"**.
+
+2. **Deterministic onboarding.** Pick a jurisdiction, enter a mobile number (exactly 10 digits after `+234`), and request a code. **No SMS is sent — the demo code is `123456`**, shown on screen, so ownership can be proved without SMS credit in four jurisdictions. Name the business, then set and confirm a 4-digit PIN. The vault address is derived in the browser at 600,000 PBKDF2 rounds. No extension, no seed phrase.
+
+3. **Automated gas provisioning.** A `0.05 tCTC` grant is dispatched to the derived address, so the first transaction costs the merchant nothing.
+
+4. **Interactive flows.**
+   * **Vault ingress** — size a reserve (30% of declared value for machinery, 20% for property) over a **1–24 month** horizon, then fund it. The deposit modal opens on **your** rail: Trugi NGN by default, with Native tCTC and Attestcoin alongside. Fire the simulated NIP transfer and watch the automated 85/15 split land on-chain.
+   * **Hardware registry** — register a productive asset. **Track A** photographs a serial plate and runs Tesseract on-device, offering candidate strings; **Track B** resolves your position to an H3 res-10 cell and binds it to a prepaid meter number.
+   * **Telemetry claims** — file a claim and run the three-second sweep. **On a laptop this will be refused**, because the gate needs an accelerometer and a laptop has none. That refusal is the point. The interface then offers a replayed sensor trace so the rest of the flow can be walked, and the receipt records that the telemetry was replayed.
+
+> **Recording sandbox.** `/demo` runs the entire journey automatically for screen recording. It drives the real components and is not part of the shipped product.
+
+### Local developer setup (optional)
 
 ```bash
+git clone https://github.com/Lideeyah/temi.git
+cd temi
 npm install
-npm run compile          # solc 0.8.28 → artifacts/ + typed ABIs in lib/abi/
-npm test                 # bytecode-level vault tests, serial matcher, sensor maths,
-                         # then the Attestcoin path against live infrastructure
-npm run dev              # vendors the Tesseract runtime first, then serves
+
+# Compile contracts (solc 0.8.28) and regenerate ABIs
+npm run compile
+
+# Full suite — 280 assertions, including live Sepolia and Chainlink proofs
+npm test
+
+# Confirm deployed bytecode still matches source
+npm run drift
+
+# Run the web application
+npm run dev
 ```
-
-`npm run dev` and `npm run build` both run `vendor:ocr`, which copies the Tesseract worker and
-WASM core out of `node_modules` and fetches the English model into `public/tesseract`. It is
-gitignored — 16 MB of binaries do not belong in the repo — and reproduced automatically. Serving
-it from our own origin is what lets a claim be filed on a bad connection.
-
-### Deploying
-
-```bash
-PRIVATE_KEY=0x... SEPOLIA_PRIVATE_KEY=0x... CONDUIT_FLOAT=2.0 npm run deploy
-```
-
-Deploys `TemiVault` to cc3-testnet and `TemiSourcePortal` to Ethereum Sepolia, registers the
-portal as trusted for chain key 1, seeds the settlement float, and writes `.env.local`. Fund the
-deployer at <https://faucet.creditcoin.org> first.
-
-### Cross-chain deposit, end to end
-
-1. On Ethereum Sepolia, call `TemiSourcePortal.fundReserveFor(yourCreditcoinAddress)` with value.
-2. Wait ~8 minutes for the attestor quorum to cover that block (the UI polls and shows you how
-   many blocks remain).
-3. Paste the Sepolia transaction hash into **Deposit → Attestcoin**. Tèmi fetches the proof,
-   dry-runs it through the precompile's `view` overload, then submits `verifyAndDeposit`.
 
 ---
 
-## Verification
+## 07. Security & Invariant Guarantees
 
-`npm test` runs against live infrastructure, not fixtures:
+* **Zero Rehypothecation.** Tier 1 reserves are ring-fenced and withdrawable at any moment with no fee, notice or penalty. The yield engine exists but **`yieldStrategy` is `address(0)` on this deployment** — no merchant capital is deployed anywhere, and the interface states so rather than quoting an APY.
+* **Cumulative Draw Ceilings.** A single claim may draw at most **10% of the pool**. Cumulatively, an operator may never draw more than **3× their lifetime deposits**. An earlier revision capped this per-claim, which allowed registering N assets for N × 3× extraction — measured at **155× ROI on a ₦250,000 deposit**, draining the pool to 3%. The ceiling is now tracked as `lifetimeTier2Drawn` across every asset an operator owns.
+* **Optimistic Challenge Window.** Mutual draws above **1% of the pool** escrow for **24 hours** against a **10% bond**, which is withheld from the merchant's own immediate payout if they cannot fund it — an honest merchant whose shop just burned down should not need to find spare tCTC before they can file. A successful challenger takes 50% of the bond.
+* **Hardware Deduplication.** `keccak256` asset identities are checked globally; `registerAsset` reverts with `AssetAlreadyRegistered`, blocking duplicate registration across market clusters.
+* **Oracle Staleness.** A price round older than **6 hours** is refused, and the round itself must be proven through `0x0FD2` rather than asserted by a caller.
+* **Recoverable Float.** Every funding path has a counterpart. Conduit liquidity and portal balances can be withdrawn by their owner — an earlier revision stranded 200 tCTC and 0.001 ETH in one-way sinks.
 
-- `tests/vault.test.mjs` — executes the compiled `TemiVault` bytecode in a local EVM: real
-  storage, real reverts, real value transfers. Covers the 85/15 split, global asset identity,
-  both attestation gates, the serial-plate gate, the spatial lock, unencumbered withdrawal,
-  write-once portal configuration, vault solvency, and the multi-asset drain attack.
-- `tests/challenge.test.mjs` — optimistic settlement end to end: instant vs escrowed paths, the
-  window, both challenge outcomes, allowance and asset restoration on rejection, and a solvency
-  assertion at every state transition.
-- `tests/oracle.test.mjs` — the live-valuation path against the real bytecode, with a stub
-  verifier standing in at `0x0FD2`: the indexed-topic decode checked against a genuine Sepolia
-  log, 8→18 decimal scaling, monotonic rounds, the staleness backstop, and conversion.
-- `tests/proximity.test.mjs` — spatial guidance geometry against real Lagos H3 cells, including
-  the assertion that pins a res-10 cell at ~12,300 m².
-- `tests/serial.test.mjs` — the serial matcher against real OCR failure modes.
-- `tests/parallax.test.mjs` — the parallax discriminator and tremor gate on synthetic scenes.
-- `tests/attestcoin.test.mjs` — pulls a real attested Sepolia transaction, fetches a real proof,
-  checks `EvmTxDecoder`'s chunk layout against Sepolia RPC ground truth, round-trips
-  `encodeProofBundle`, calls the live `0x0FD2` precompile (returns `true`), and confirms a forged
-  Merkle root reverts inside the precompile.
+### Known limitations, stated plainly
+
+* **Sensor telemetry is client-attested.** The contract cannot distinguish a measured reading from a replayed one. This is the open problem hardware attestation would close, and evaluator mode performs that forgery deliberately and in the open rather than hiding it.
+* **The fiat rails are simulated.** Trugi, Providus, MTN MoMo and M-PESA are named and modelled; no production banking integration is live.
+* **PenguinSwap has no verifiable cc3-testnet router**, so the USD1 hedging leg is designed rather than executed.
 
 ---
 
-## Deployed
+## 08. License
 
-| Contract | Chain | Address |
-| --- | --- | --- |
-| `TemiVault` | Creditcoin cc3-testnet (102031) | [`0x17766312…4272a2c`](https://creditcoin-testnet.blockscout.com/address/0x17766312c7300d01aed58174bc6ff39944272a2c) |
-| `TemiSourcePortal` | Ethereum Sepolia (Attestcoin chain key 1) | [`0x81b78bc8…a66819c`](https://sepolia.etherscan.io/address/0x81b78bc835267408d851fae39a15e123ea66819c) |
-| Block Prover precompile | Creditcoin runtime | [`0x…0FD2`](https://creditcoin-testnet.blockscout.com/address/0x0000000000000000000000000000000000000FD2) |
-| Chainlink ETH/USD aggregator | Ethereum Sepolia | `0x719E22E3D4b690E5d96cCb40619180B5427F14AE` |
-
-Both source-chain bindings are write-once and already set, so neither can be repointed.
-
-### Live Attestcoin transactions
-
-The readability path has been exercised end to end on the deployed contracts, in both of its roles:
-
-| What | Transaction |
-| --- | --- |
-| **Live valuation** — a real Chainlink round read off Ethereum through `0x0FD2` and adopted as the vault's rate (round 35950, $2478.30, 356k gas) | [`0x01040a3c…c9e3534bb`](https://creditcoin-testnet.blockscout.com/tx/0x01040a3c6282eadf6c21e3b367e1083f7499e056c37bf4e2b3cc228c9e3534bb) |
-| **Source deposit** — 0.001 ETH funded on Ethereum Sepolia, emitting `ReserveFunded` | [`0xa3081650…601c7174`](https://sepolia.etherscan.io/tx/0xa3081650daaea03f0a6c4186ff3827460b5224957a4b31bb124d1993601c7174) |
-| **Cross-chain credit** — that Sepolia deposit proven and read into Creditcoin, priced at the proven rate, split 85/15 (319k gas) | [`0x2298335e…4e9994b1c`](https://creditcoin-testnet.blockscout.com/tx/0x2298335e7189d1fb203a5672a8bd3e4ad0f7f1ee7092f85632703c44e9994b1c) |
-
-```
-0.001 ETH on Sepolia
-  -> attestor quorum reaches block 11,681,064   (~44 blocks, ~9 min)
-  -> 0x0FD2 verifies inclusion + continuity
-  -> priced at the proven ETH/USD of $2478.30 against tCTC/USD of $0.90
-  -> credited 2.753666666666666666 tCTC
-     tier 1  2.340616666666666666   (withdrawable)
-     tier 2  0.413050000000000000   (mutual buffer)
-```
-
-## Regional adaptation
-
-`TemiVault` is currency-agnostic — it moves 18-decimal base units and knows nothing about Naira,
-Cedi or Shilling. Every fiat figure is a presentation layer resolved from the merchant's declared
-jurisdiction, which is what lets one deployed contract serve four markets without a redeploy. No
-conversion rate ever reaches the chain.
-
-| Jurisdiction | Dialing | Currency | Rate per tCTC | Settlement rail |
-| --- | --- | --- | --- | --- |
-| Nigeria *(pilot)* | +234 | ₦ NGN | 1,450 | Trugi NIP Instant Transfer |
-| Ghana | +233 | GH₵ GHS | 14.8 | MTN MoMo |
-| Kenya | +254 | KSh KES | 128 | M-Pesa Express |
-| Global | +1 / injected | $ USD1 | 1.0 | Attestcoin cross-chain |
-
-The rails differ because the payment infrastructure genuinely differs — Nigeria runs on instant
-bank transfer, Ghana and Kenya on mobile money. Selecting a jurisdiction propagates to the currency
-toggle, every balance, the sizing card, the funding modal and the settlement receipt. Jurisdictions
-we have not operated in say so on the selector rather than implying a live pilot.
-
-Onboarding is three stages: **identity** (jurisdiction, trading entity, mobile number in E.164,
-then passkey provisioning), **reserve sizing**, then **funding** on the region's own rail. Each
-local rail carries a simulate control, because a judge has no Nigerian bank account, no MTN wallet
-and no M-Pesa line — without it the local rail is a dead end for exactly the people assessing it.
-
-## The zero state
-
-A merchant with no vault has nothing to look at — every balance is zero and every tile is a row
-of dashes. Rather than showing them that and asking them to commit first, the uninitialised
-dashboard is replaced by the one thing they can act on without an account: sizing their own
-reserve. They pick machinery or property, type what it is worth, and see the target, the monthly
-contribution and the 85/15 split before anything is signed. Those numbers carry into funding.
-
-`useVault` skips every per-operator read when there is no operator, so an unauthenticated visitor
-costs one `protocolTelemetry` call and a block number rather than a dozen `eth_call`s against the
-zero address on every poll. The live network console stays visible throughout — it is the part
-that proves the protocol is real, and it does not depend on the visitor having an account.
-
-The dashboard flips to the live ledger once `lifetimeDeposits > 0 || assets.length > 0` — the
-honest on-chain signal that a merchant has actually started.
-
-There is no telemetry sidebar. Every protocol figure lives where it is relevant rather than in a
-column competing with the product: the precompile address and attested Sepolia height sit behind
-the network badge in the header, cross-chain proof count and read cost appear in the Attestcoin
-deposit tab when cross-chain money is actually moving, the tremor and parallax thresholds are read
-out live on the sweep viewfinder beside the reticle, the settlement fee is itemised on the receipt,
-and the proven ETH/USD rate sits on the line that converts Naira into tCTC. One hairline footer
-carries the chain, the precompile and the spatial resolution permanently.
-
-## Two surfaces
-
-| Route | What it is |
-| --- | --- |
-| `/` | The public case. Hero, an interactive value-equation widget, the problem grid against Nigerian commercial insurance, and a live network telemetry strip. |
-| `/app` | The merchant vault. Dual reserve, asset registry, the three-second sweep, and the Attestcoin telemetry console. |
-
-The landing page's telemetry strip and the vault's console both read live cc3-testnet and proof-
-builder state on an interval. Nothing is seeded — an undeployed vault renders zeroes.
-
-## Architecture
-
-```
-contracts/
-  TemiVault.sol            ASC: Attestcoin readability, dual reserve, settlement invariant
-  TemiSourcePortal.sol     Ethereum Sepolia intake, emits ReserveFunded
-  EvmTxDecoder.sol         decodes the USC v1 attested payload (type-agnostic)
-  INativeQueryVerifier.sol precompile interface, verbatim from Blockscout
-lib/
-  SpatialSweepEngine.ts    IMU tremor + motion-parallax computer vision, all on-device
-  H3SpatialLock.ts         high-accuracy GPS → H3 res-10 cell
-  SerialPlateReader.ts     on-device OCR + hash-matching of the serial plate
-  AttestcoinConduit.ts     proof-builder client + ABI packing
-  ChainlinkOracle.ts       finds a provable price round and packs it for submitPriceProof
-components/
-  landing/                 public landing page: value equation + live telemetry strip
-  BentoDashboard.tsx       reserve · incident · inventory · Attestcoin telemetry console
-  SpatialSweepModal.tsx    viewfinder, oscilloscope, rejection banners, settlement receipt
-  DepositModal.tsx         Attestcoin (Sepolia) · native tCTC · Trugi NGN virtual account
-  RegisterAssetModal.tsx   serial-plate track · GPS + prepaid-meter track
-  SensorOscilloscope.tsx   60Hz canvas trace of raw accelerometer magnitude
-```
-
-## Design
-
-Tactile Paper & Cool Slate — warm paper canvas `#F4F1EA`, crisp white cards on hairline rules,
-deep slate ink `#1F242F`, and desaturated accents: cool moss `#4A6B5D` for the mutual buffer,
-ochre `#8C733E` for machinery, dusty rust `#8C4A4A` for claims and rejections, steel blue
-`#4A627A` for the Attestcoin rail. Geist Sans for editorial labels, Geist Mono with tabular
-figures for every financial metric, coordinate and hash. It should read as a premium physical
-ledger, not a crypto dashboard.
-
-## Notes on simulation
-
-Everything on-chain is real: deposits, registrations, Attestcoin proof verification and claim
-settlement are genuine cc3-testnet transactions. Two things are explicitly labelled simulations
-in the UI — the Trugi NGN virtual-account webhook (which fires a real `depositReserve()`
-transaction, standing in for a production NIBSS relayer) and the fiat off-ramp receipt shown
-after settlement. The NGN figures throughout are a display conversion and are never used in
-on-chain math.
+MIT License. Designed and engineered for the Creditcoin CC3 Ecosystem.

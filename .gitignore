@@ -20,3 +20,6 @@ public/tesseract
 # Recording sandbox — local only, never shipped or committed.
 app/demo/
 components/demo/
+
+# Test for the local-only recording sandbox — imports components/demo, which is ignored.
+tests/demo-figures.test.mjs
