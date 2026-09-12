@@ -11,7 +11,7 @@ import {
   ShieldCheck,
   Wallet,
 } from 'lucide-react';
-import { decodeEventLog, isHex, type Address, type Hex, type WalletClient } from 'viem';
+import { formatUnits, decodeEventLog, isHex, type Address, type Hex, type WalletClient } from 'viem';
 import {
   creditcoinPublicClient,
   creditcoinTestnet,
@@ -670,6 +670,14 @@ const SIMULATE_LABEL: Record<string, string> = {
   'mpesa-stk': 'Simulate M-Pesa STK confirmation',
 };
 
+interface IssuedAccount {
+  bank: string;
+  bankCode: string;
+  accountNumber: string;
+  accountName: string;
+  mode: string;
+}
+
 function TrugiTab({
   walletClient,
   account,
@@ -681,6 +689,35 @@ function TrugiTab({
   onDeposited: () => void;
   prefillWei?: bigint;
 }) {
+  /*
+   * The account is issued, not written here.
+   *
+   * It used to be three hardcoded strings, which meant every merchant was shown the same number
+   * at a named bank — an account that belongs to nobody, presented as though it had been
+   * provisioned for them. It is now derived per beneficiary and structurally valid under the CBN
+   * NUBAN standard, including its check digit, and the panel says which mode issued it.
+   */
+  const [virtualAccount, setVirtualAccount] = useState<IssuedAccount | null>(null);
+
+  useEffect(() => {
+    if (!account) return setVirtualAccount(null);
+    let cancelled = false;
+    void fetch('/api/trugi/account', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ address: account }),
+    })
+      .then((r) => r.json())
+      .then((body) => {
+        if (!cancelled && body.account) setVirtualAccount(body.account as IssuedAccount);
+      })
+      .catch(() => {
+        // An account we could not issue is shown as absent, not as someone else's.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [account]);
   const { region, fiat, setDenomination } = useRegion();
   const [pending, setPending] = useState(false);
   const [txHash, setTxHash] = useState<Hex | null>(null);
@@ -706,13 +743,30 @@ function TrugiTab({
     setTxHash(null);
 
     try {
+      /*
+       * Go through the rail, not around it.
+       *
+       * This used to POST straight to a relayer that moved funds on an unauthenticated request.
+       * It now triggers the notification a provider would send: signed server-side, delivered over
+       * HTTP to the webhook, signature verified, account checked against the beneficiary, and the
+       * reference recorded so a retry cannot settle twice. Swapping in a live provider removes
+       * this call entirely — their bank posts the same webhook instead.
+       */
       setStep(`Receiving ${fiat(RELAY_AMOUNT)} on ${region.railName}…`);
-      const response = await fetch('/api/relayer', {
+      const response = await fetch('/api/trugi/simulate', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ address: account, amount: RELAY_AMOUNT.toString() }),
+        body: JSON.stringify({
+          address: account,
+          naira: Number(formatUnits(RELAY_AMOUNT, 18)) * region.ratePerTctc,
+        }),
       });
-      const body = (await response.json()) as { error?: string; detail?: string; hash?: Hex };
+      const body = (await response.json()) as {
+        error?: string;
+        detail?: string;
+        hash?: Hex;
+        notification?: { reference: string; sessionId: string };
+      };
       if (!response.ok) {
         setError(body.detail ? `${body.error}. ${body.detail}` : (body.error ?? 'Settlement failed'));
         return;
@@ -773,10 +827,23 @@ function TrugiTab({
       <div className="border border-hairline bg-card px-3.5 py-3">
         {region.rail === 'trugi-nip' ? (
           <>
-            <p className="eyebrow mb-2.5">Your dedicated virtual account</p>
-            <CopyRow label="Bank" value="Providus Bank" mono={false} />
-            <CopyRow label="Account" value="9902148821" />
-            <CopyRow label="Name" value="Tèmi / Lagos Traders" mono={false} />
+            <div className="mb-2.5 flex items-baseline justify-between gap-2">
+              <p className="eyebrow">Your dedicated virtual account</p>
+              {virtualAccount ? (
+                <span className="eyebrow text-ochre">{virtualAccount.mode}</span>
+              ) : null}
+            </div>
+            {virtualAccount ? (
+              <>
+                <CopyRow label="Bank" value={virtualAccount.bank} mono={false} />
+                <CopyRow label="Account" value={virtualAccount.accountNumber} />
+                <CopyRow label="Name" value={virtualAccount.accountName} mono={false} />
+              </>
+            ) : (
+              <p className="text-[11px] text-slate-soft">
+                {account ? 'Issuing your account…' : 'Open your vault to be issued an account.'}
+              </p>
+            )}
           </>
         ) : region.rail === 'mtn-momo' ? (
           <>

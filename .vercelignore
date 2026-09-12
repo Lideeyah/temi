@@ -1,0 +1,7 @@
+# The recording sandbox is local-only. `vercel deploy` uploads the working directory rather than
+# the git tree, so .gitignore does not keep it out of a deployment — this does.
+app/demo
+components/demo
+lib/ScriptedState.ts
+tests/demo-figures.test.mjs
+docs
