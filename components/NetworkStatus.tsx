@@ -132,12 +132,49 @@ function Row({
  * without a column of it competing with the product for attention.
  */
 export function StatusBar() {
+  /*
+   * The readability claim has to be a reading, not a string.
+   *
+   * This line said "Attestcoin readability 0x0FD2 verified" as a literal in an array — a claim of
+   * verification that nothing had verified. It is the one mandatory capability of this build, so
+   * it is the last place to assert rather than check. It now reports the height Sepolia is
+   * actually attested to, refreshed every thirty seconds, and says so plainly when the attestor
+   * cannot be reached instead of claiming success regardless.
+   */
+  const [attested, setAttested] = useState<number | null>(null);
+  const [reachable, setReachable] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const poll = () =>
+      void getAttestedHeight(ATTESTCOIN_CHAIN_KEYS.ETHEREUM_SEPOLIA)
+        .then((h) => {
+          if (cancelled) return;
+          setAttested(h);
+          setReachable(true);
+        })
+        .catch(() => !cancelled && setReachable(false));
+    poll();
+    const timer = setInterval(poll, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
+
+  const readability =
+    reachable === false
+      ? 'Attestcoin 0x0FD2 · attestor unreachable'
+      : attested === null
+        ? 'Attestcoin 0x0FD2 · reading attested height…'
+        : `Attestcoin 0x0FD2 · Sepolia attested to ${attested.toLocaleString('en-US')}`;
+
   return (
     <footer className="mt-auto border-t border-hairline">
       <div className="mx-auto flex w-full max-w-[1180px] flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 sm:px-8">
         {[
           `Creditcoin cc3-testnet (${creditcoinTestnet.id})`,
-          'Attestcoin readability 0x0FD2 verified',
+          readability,
           'Uber H3 res 10',
           'Dual-reserve v1.2',
         ].map((item, index) => (
