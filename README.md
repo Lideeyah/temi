@@ -294,7 +294,7 @@ The app ships four jurisdictions today. Nigeria is piloted; the others are wired
 ├── hooks/
 │   ├── useMerchantAccount.ts      # Phone+PIN and injected-wallet paths behind one interface
 │   └── useVault.ts                # On-chain reads, claims, telemetry, oracle
-├── tests/                         # 16 suites, 295 assertions, Node + ethereumjs EVM (Cancun)
+├── tests/                         # 15 suites, 295 assertions, Node + ethereumjs EVM (Cancun)
 │   ├── vault.test.mjs             # Solvency invariants against real deployed bytecode
 │   ├── challenge.test.mjs         # Escrow, bond, challenge, finalisation
 │   ├── revenue.test.mjs           # Fee charged on the Tier 2 draw only
