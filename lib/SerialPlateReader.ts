@@ -80,7 +80,11 @@ export interface SerialMatch {
   corrected: boolean;
 }
 
-export type SerialErrorCode = 'ERR_OCR_UNAVAILABLE' | 'ERR_SERIAL_NOT_FOUND' | 'ERR_NO_TEXT_READ';
+export type SerialErrorCode =
+  | 'ERR_OCR_UNAVAILABLE'
+  | 'ERR_SERIAL_NOT_FOUND'
+  | 'ERR_NO_TEXT_READ'
+  | 'ERR_VIEWFINDER_NOT_READY';
 
 export class SerialPlateError extends Error {
   readonly code: SerialErrorCode;
@@ -253,6 +257,24 @@ export function preloadOcr(): void {
  * opposite, so this samples the full-resolution frame and upscales the crop before thresholding.
  */
 export function captureSerialCrop(video: HTMLVideoElement, scale = 3): HTMLCanvasElement {
+  /*
+   * A viewfinder with no dimensions yet.
+   *
+   * videoWidth stays 0 until the stream delivers metadata, which is a beat or two after the
+   * element is mounted and the camera light comes on. Tapping capture inside that window produced
+   * a zero-sized crop and threw IndexSizeError out of getImageData — a raw browser exception, in
+   * a flow whose whole purpose is to bind an asset a merchant may later need to claim against.
+   *
+   * Refuse in the module's own vocabulary instead, so the caller can say something useful.
+   */
+  if (!video.videoWidth || !video.videoHeight) {
+    throw new SerialPlateError(
+      'ERR_VIEWFINDER_NOT_READY',
+      'The camera has not delivered a frame yet',
+      'Give the viewfinder a moment to focus, then capture again.',
+    );
+  }
+
   const sx = Math.floor(video.videoWidth * SERIAL_RETICLE.x);
   const sy = Math.floor(video.videoHeight * SERIAL_RETICLE.y);
   const sw = Math.floor(video.videoWidth * SERIAL_RETICLE.width);

@@ -17,12 +17,26 @@ import path from 'node:path';
 const OUT = path.join(process.cwd(), 'public', 'tesseract');
 fs.mkdirSync(OUT, { recursive: true });
 
+/*
+ * Every core variant the worker may ask for.
+ *
+ * tesseract.js picks its core at runtime by feature-detecting the browser, then importScripts the
+ * one it chose. Vendoring only the SIMD and plain builds worked until a browser reported support
+ * for relaxed SIMD — Chrome does — at which point it reached for a file that had never been
+ * copied and the worker died with a bare NetworkError, several layers below anything that could
+ * explain itself.
+ *
+ * The cost of guessing wrong is a dead camera; the cost of copying all three is disk. Copy all
+ * three.
+ */
+const CORES = ['tesseract-core-relaxedsimd-lstm', 'tesseract-core-simd-lstm', 'tesseract-core-lstm'];
+
 const copies = [
   ['node_modules/tesseract.js/dist/worker.min.js', 'worker.min.js'],
-  ['node_modules/tesseract.js-core/tesseract-core-simd-lstm.wasm.js', 'tesseract-core-simd-lstm.wasm.js'],
-  ['node_modules/tesseract.js-core/tesseract-core-simd-lstm.wasm', 'tesseract-core-simd-lstm.wasm'],
-  ['node_modules/tesseract.js-core/tesseract-core-lstm.wasm.js', 'tesseract-core-lstm.wasm.js'],
-  ['node_modules/tesseract.js-core/tesseract-core-lstm.wasm', 'tesseract-core-lstm.wasm'],
+  ...CORES.flatMap((core) => [
+    [`node_modules/tesseract.js-core/${core}.wasm.js`, `${core}.wasm.js`],
+    [`node_modules/tesseract.js-core/${core}.wasm`, `${core}.wasm`],
+  ]),
 ];
 
 for (const [from, to] of copies) {

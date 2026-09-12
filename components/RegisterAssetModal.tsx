@@ -310,8 +310,17 @@ function MachineryTrack({
     still.height = Math.round((640 * video.videoHeight) / Math.max(1, video.videoWidth));
     still.getContext('2d')?.drawImage(video, 0, 0, still.width, still.height);
 
-    // Three crops of the same frame, so a marginal read gets more than one chance.
-    const crops = [captureSerialCrop(video), captureSerialCrop(video, 4), captureSerialCrop(video, 2)];
+    // Three crops of the same frame, so a marginal read gets more than one chance. Cropping can
+    // refuse — a viewfinder that has not delivered a frame yet has no dimensions to crop — and
+    // that refusal belongs in the same place as a failed read, not thrown through the component.
+    let crops: HTMLCanvasElement[];
+    try {
+      crops = [captureSerialCrop(video), captureSerialCrop(video, 4), captureSerialCrop(video, 2)];
+    } catch (cause) {
+      const plateError = cause as SerialPlateError;
+      setReadError({ title: plateError.message, detail: plateError.detail });
+      return;
+    }
 
     setCapture(still.toDataURL('image/webp', 0.7));
     stopCamera();
