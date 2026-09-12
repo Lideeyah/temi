@@ -319,7 +319,14 @@ function AttestcoinTab({
           <Link2 size={9} strokeWidth={2} />
           Chain key {chainKey} · Ethereum Sepolia
         </Badge>
-        <Badge tone="moss">Verified via 0x0FD2 · 0 ATC</Badge>
+        {/* This said "Verified via 0x0FD2" in success green before anything had been verified —
+            a completed-state claim rendered on arrival. It now describes the mechanism until a
+            proof has actually cleared the precompile, and only then reports one. */}
+        {stage === 'done' ? (
+          <Badge tone="moss">Proof verified by 0x0FD2</Badge>
+        ) : (
+          <Badge tone="steel">Inclusion proved in-contract via 0x0FD2</Badge>
+        )}
         {crossChainCount !== null ? (
           <Badge tone="steel">
             {crossChainCount.toString()} cross-chain inflow{crossChainCount === 1n ? '' : 's'} verified
@@ -847,17 +854,38 @@ function TrugiTab({
           </>
         ) : region.rail === 'mtn-momo' ? (
           <>
-            <p className="eyebrow mb-2.5">Approve the MoMo prompt on your phone</p>
+            {/* No adapter exists for this rail. The identifiers below are the shape a live MTN
+                integration uses, not credentials we hold — and *170# is MTN's real short code,
+                so presenting it unlabelled read as a provisioned merchant account. */}
+            <div className="mb-2.5 flex items-baseline justify-between gap-2">
+              <p className="eyebrow">Approve the MoMo prompt on your phone</p>
+              <span className="eyebrow text-ochre">not yet piloted</span>
+            </div>
             <CopyRow label="Merchant ID" value="Tèmi Ghana" mono={false} />
             <CopyRow label="Short code" value="*170#" />
             <CopyRow label="Reference" value="TEMI-VAULT" />
+            <p className="mt-2 text-[10px] leading-relaxed text-slate-soft">
+              Illustrative. {region.name} is configured — currency, phone plan and payout target
+              all resolve — but no merchant has settled through this rail, and no MTN integration
+              is connected.
+            </p>
           </>
         ) : (
           <>
-            <p className="eyebrow mb-2.5">M-Pesa Express · STK push</p>
+            {/* Same reasoning as the MoMo panel: a Paybill number is a real-world business
+                identifier, and an unlabelled one implies a registration we do not have. */}
+            <div className="mb-2.5 flex items-baseline justify-between gap-2">
+              <p className="eyebrow">M-Pesa Express · STK push</p>
+              <span className="eyebrow text-ochre">not yet piloted</span>
+            </div>
             <CopyRow label="Paybill" value="4102938" />
             <CopyRow label="Account" value="TEMI-VAULT" />
             <CopyRow label="Merchant" value="Tèmi Kenya" mono={false} />
+            <p className="mt-2 text-[10px] leading-relaxed text-slate-soft">
+              Illustrative. {region.name} is configured — currency, phone plan and payout target
+              all resolve — but no merchant has settled through this rail, and no Daraja
+              integration is connected.
+            </p>
           </>
         )}
       </div>
